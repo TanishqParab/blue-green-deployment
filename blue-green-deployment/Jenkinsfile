@@ -62,6 +62,8 @@ pipeline {
                     scp -o StrictHostKeyChecking=no -i ~/.ssh/my-key.pem ${APP_FILE} ec2-user@${green_instance}:/home/ec2-user/app.py
                     ssh -o StrictHostKeyChecking=no -i ~/.ssh/my-key.pem ec2-user@${green_instance} 'nohup python3 /home/ec2-user/app.py > app.log 2>&1 &'
                     """
+
+                    echo "Deployment Completed!"
                 }
             }
         }
@@ -80,11 +82,30 @@ pipeline {
                 }
             }
         }
+
+        stage('Wait Before Destroy') {
+            steps {
+                script {
+                    echo "Waiting for 15 minutes before destroying infrastructure..."
+                    sh "sleep 900"
+                }
+            }
+        }
+
+        stage('Destroy Infrastructure') {
+            steps {
+                script {
+                    dir("${TF_WORKING_DIR}") {
+                        sh 'terraform destroy -auto-approve'
+                    }
+                }
+            }
+        }
     }
 
     post {
         always {
-            echo "Deployment Completed!"
+            echo "Destroy Completed!"
         }
     }
 }
