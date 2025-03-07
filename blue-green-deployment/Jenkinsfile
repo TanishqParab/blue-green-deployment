@@ -54,13 +54,13 @@ pipeline {
                     def green_instance = sh(script: "terraform output -raw green_instance_public_ip", returnStdout: true).trim()
 
                     sh """
-                    scp -o StrictHostKeyChecking=no -i ~/.ssh/my-key.pem ${APP_FILE} ec2-user@${blue_instance}:/home/ec2-user/app.py
-                    ssh -o StrictHostKeyChecking=no -i ~/.ssh/my-key.pem ec2-user@${blue_instance} 'nohup python3 /home/ec2-user/app.py > app.log 2>&1 &'
+                    scp -o StrictHostKeyChecking=no -i ~/.ssh/blue-green-key.pem ${APP_FILE} ec2-user@${blue_instance}:/home/ec2-user/app.py
+                    ssh -o StrictHostKeyChecking=no -i ~/.ssh/blue-green-key.pem ec2-user@${blue_instance} 'nohup python3 /home/ec2-user/app.py > app.log 2>&1 &'
                     """
 
                     sh """
-                    scp -o StrictHostKeyChecking=no -i ~/.ssh/my-key.pem ${APP_FILE} ec2-user@${green_instance}:/home/ec2-user/app.py
-                    ssh -o StrictHostKeyChecking=no -i ~/.ssh/my-key.pem ec2-user@${green_instance} 'nohup python3 /home/ec2-user/app.py > app.log 2>&1 &'
+                    scp -o StrictHostKeyChecking=no -i ~/.ssh/blue-green-key.pem ${APP_FILE} ec2-user@${green_instance}:/home/ec2-user/app.py
+                    ssh -o StrictHostKeyChecking=no -i ~/.ssh/blue-green-key.pem ec2-user@${green_instance} 'nohup python3 /home/ec2-user/app.py > app.log 2>&1 &'
                     """
 
                     echo "Deployment Completed!"
@@ -83,11 +83,11 @@ pipeline {
             }
         }
 
-        stage('Wait Before Destroy') {
+        stage('Wait before Destroy') {
             steps {
                 script {
                     echo "Waiting for 15 minutes before destroying infrastructure..."
-                    sh "sleep 900"
+                    sh "sleep 900"  // 900 seconds = 15 minutes
                 }
             }
         }
