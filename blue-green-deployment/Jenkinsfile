@@ -1,0 +1,134 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION = "us-east-1"
+        AWS_CREDENTIALS_ID = "aws-credentials"
+        TF_WORKING_DIR = "./blue-green-deployment/terraform"
+        APP_FILE = "app.py"
+        GITHUB_REPO = "https://github.com/TanishqParab/blue-green-deployment"
+        SSH_KEY_ID = "blue-green-key"
+    }
+
+    stages {
+        stage('Clone GitHub Repository') {
+            steps {
+                script {
+                    echo "Cloning the GitHub repository from ${GITHUB_REPO}"
+                    git url: "${GITHUB_REPO}", branch: 'main'
+                }
+            }
+        }
+
+        stage('Initialize Terraform') {
+            steps {
+                script {
+                    echo "Initializing Terraform in ${TF_WORKING_DIR}"
+                    dir("${TF_WORKING_DIR}") {
+                        sh 'terraform init'
+                    }
+                }
+            }
+        }
+
+        stage('Plan Infrastructure') {
+            steps {
+                script {
+                    echo "Running Terraform plan"
+                    dir("${TF_WORKING_DIR}") {
+                        sh 'terraform plan -out=tfplan'
+                    }
+                }
+            }
+        }
+
+        stage('Apply Infrastructure') {
+            steps {
+                script {
+                    echo "Applying Terraform plan"
+                    dir("${TF_WORKING_DIR}") {
+                        sh 'terraform apply -auto-approve tfplan'
+                    }
+                }
+            }
+        }
+
+        stage('Deploy Python App to Blue Environment') {
+            steps {
+                script {
+                    def blue_instance = sh(script: "terraform output -raw blue_instance_public_ip", returnStdout: true).trim()
+                    echo "Deploying app.py to Blue instance: ${blue_instance}"
+                    sshagent([SSH_KEY_ID]) {
+                        sh """
+                        scp -o StrictHostKeyChecking=no ${APP_FILE} ec2-user@${blue_instance}:/home/ec2-user/app.py
+                        ssh ec2-user@${blue_instance} 'nohup python3 /home/ec2-user/app.py > app.log 2>&1 &'
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Deploy Python App to Green Environment') {
+            steps {
+                script {
+                    def green_instance = sh(script: "terraform output -raw green_instance_public_ip", returnStdout: true).trim()
+                    echo "Deploying app.py to Green instance: ${green_instance}"
+                    sshagent([SSH_KEY_ID]) {
+                        sh """
+                        scp -o StrictHostKeyChecking=no ${APP_FILE} ec2-user@${green_instance}:/home/ec2-user/app.py
+                        ssh ec2-user@${green_instance} 'nohup python3 /home/ec2-user/app.py > app.log 2>&1 &'
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Deployment Completed!') {
+            steps {
+                script {
+                    echo "Deployment Completed!"
+                }
+            }
+        }
+
+        stage('Switch Traffic to Green Environment') {
+            steps {
+                script {
+                    def active_instance = sh(script: "terraform output -raw active_instance", returnStdout: true).trim()
+                    def standby_instance = sh(script: "terraform output -raw standby_instance", returnStdout: true).trim()
+                    echo "Switching traffic to Green instance: ${standby_instance}"
+                    sh "aws elbv2 register-targets --target-group-arn \$TARGET_GROUP_ARN --targets Id=${standby_instance} --region ${AWS_REGION}"
+                    sh "sleep 30"
+                    echo "Deregistering Blue instance: ${active_instance}"
+                    sh "aws elbv2 deregister-targets --target-group-arn \$TARGET_GROUP_ARN --targets Id=${active_instance} --region ${AWS_REGION}"
+                }
+            }
+        }
+
+        stage('Wait before Destroy') {
+            steps {
+                script {
+                    echo "Waiting for 15 minutes before destroying infrastructure..."
+                    sh "sleep 900"
+                }
+            }
+        }
+
+        stage('Destroy Infrastructure') {
+            steps {
+                script {
+                    echo "Destroying Infrastructure..."
+                    dir("${TF_WORKING_DIR}") {
+                        sh 'terraform destroy -auto-approve'
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            echo "Destroy Completed!"
+        }
+    }
+}
