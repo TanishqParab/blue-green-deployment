@@ -28,11 +28,12 @@ pipeline {
                     echo "Running Terraform plan"
                     dir("${TF_WORKING_DIR}") {
                         // Encode private key in base64 before writing to tfvars
-                        def privateKeyBase64 = sh(script: "echo '${PRIVATE_KEY}' | base64 -w 0", returnStdout: true).trim()
-                        writeFile file: 'terraform.tfvars', text: """
-                        private_key_base64 = \"${privateKeyBase64}\"
-                        """
-                        sh 'terraform plan -out=tfplan -var-file=terraform.tfvars'
+                        withCredentials([sshUserPrivateKey(credentialsId: 'JENKINS_SSH_KEY', keyFileVariable: 'SSH_KEY')]) {
+                            sh """
+                            export TF_VAR_private_key_path=\$SSH_KEY
+                            terraform plan -out=tfplan
+                            """
+                        }
                     }
                 }
             }
@@ -43,7 +44,7 @@ pipeline {
                 script {
                     echo "Applying Terraform plan"
                     dir("${TF_WORKING_DIR}") {
-                        sh 'terraform apply -auto-approve -var-file=terraform.tfvars'
+                        sh 'terraform apply -auto-approve'
                     }
                 }
             }
