@@ -17,13 +17,10 @@ variable "key_name" {
   default     = "blue-green-key-pair"
 }
 
-variable "private_key_path" {
-  description = "Path to the private key for SSH"
+variable "private_key_base64" {
+  description = "Base64 encoded private key for SSH"
   type        = string
 }
-
-
-
 
 variable "public_key_path" {
   description = "Path to the public key file"
@@ -31,17 +28,10 @@ variable "public_key_path" {
   default     = "/var/lib/jenkins/.ssh/blue-green-key.pub"
 }
 
-
-
 variable "availability_zones" {
   type    = list(string)
   default = ["us-east-1a", "us-east-1b"]
 }
-/*variable "ssh_agent" {
-  type    = bool
-  default = true
-  
-} ////////////////////////*/
 
 variable "instance_type" {
   default = "t3.micro"
