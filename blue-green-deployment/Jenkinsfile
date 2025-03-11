@@ -28,7 +28,7 @@ pipeline {
                     echo "Running Terraform plan"
                     dir("${TF_WORKING_DIR}") {
                         // Encode private key in base64 before writing to tfvars
-                        withCredentials([sshUserPrivateKey(credentialsId: 'JENKINS_SSH_KEY', keyFileVariable: 'SSH_KEY')]) {
+                        withCredentials([sshUserPrivateKey(credentialsId: 'blue-green-key', keyFileVariable: 'SSH_KEY')]) {
                             sh """
                             export TF_VAR_private_key_path=\$SSH_KEY
                             terraform plan -out=tfplan
