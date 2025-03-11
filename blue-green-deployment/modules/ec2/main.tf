@@ -1,7 +1,7 @@
 resource "aws_instance" "blue" {
   ami           = "ami-05b10e08d247fb927"
   instance_type = var.instance_type
-  key_name      = "blue-green-key-pair"  # Ensure the key exists in AWS
+  key_name      = var.key_name
   subnet_id     = var.subnet_id
   security_groups = [var.ec2_security_group_id]
 
@@ -10,7 +10,7 @@ resource "aws_instance" "blue" {
   }
 
   provisioner "file" {
-    source      = "${path.module}/scripts/install_dependencies.sh"  # Use relative path
+    source      = "${path.module}/scripts/install_dependencies.sh"
     destination = "/home/ec2-user/install_dependencies.sh"
   }
 
@@ -20,7 +20,7 @@ resource "aws_instance" "blue" {
   }
 
   provisioner "file" {
-    source      = "${path.root}/Jenkinsfile"  # Use relative path
+    source      = "${path.root}/Jenkinsfile"
     destination = "/home/ec2-user/Jenkinsfile"
   }
 
@@ -33,8 +33,8 @@ resource "aws_instance" "blue" {
 
   connection {
     type        = "ssh"
-    user        = "ec2-user"  # Change if using a different AMI
-    private_key = file("${path.root}/blue-green-key.pem")  # Use correct private key path
+    user        = "ec2-user"
+    private_key = file(var.private_key_path)  # 🔹 Use variable instead of hardcoding path
     host        = self.public_ip
   }
 }
@@ -42,7 +42,7 @@ resource "aws_instance" "blue" {
 resource "aws_instance" "green" {
   ami           = "ami-05b10e08d247fb927"
   instance_type = var.instance_type
-  key_name      = "blue-green-key-pair"  # Ensure the key exists in AWS
+  key_name      = var.key_name
   subnet_id     = var.subnet_id
   security_groups = [var.ec2_security_group_id]
 
@@ -74,8 +74,8 @@ resource "aws_instance" "green" {
 
   connection {
     type        = "ssh"
-    user        = "ec2-user"  
-    private_key = file("${path.root}/blue-green-key.pem")  # Correct private key path
+    user        = "ec2-user"
+    private_key = file(var.private_key_path)  # 🔹 Use variable instead of hardcoding path
     host        = self.public_ip
   }
 }
