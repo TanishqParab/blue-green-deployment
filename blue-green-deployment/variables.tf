@@ -20,7 +20,6 @@ variable "key_name" {
 variable "private_key_path" {
   description = "Path to the private key for SSH"
   type        = string
-  default     = "${path.root}/blue-green-key.pem"
 }
 
 
