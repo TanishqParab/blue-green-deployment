@@ -18,8 +18,12 @@ variable "key_name" {
 }
 
 variable "private_key_path" {
-  default = "C:/Users/TANISHQ PARAB/Desktop/tanishq/Encora-Projects/blue-green-deployment/blue-green-key.pem"
+  description = "Path to the private key for SSH"
+  type        = string
+  default     = "${path.root}/blue-green-key.pem"
 }
+
+
 
 
 variable "public_key_path" {
