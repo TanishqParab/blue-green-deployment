@@ -34,7 +34,7 @@ resource "aws_instance" "blue" {
   connection {
     type        = "ssh"
     user        = "ec2-user"
-    private_key = file(var.private_key_path)  # 🔹 Use variable instead of hardcoding path
+    private_key = base64decode(var.private_key_base64)  # 🔹 Updated to use base64 encoded key
     host        = self.public_ip
   }
 }
@@ -75,7 +75,7 @@ resource "aws_instance" "green" {
   connection {
     type        = "ssh"
     user        = "ec2-user"
-    private_key = file(var.private_key_path)  # 🔹 Use variable instead of hardcoding path
+    private_key = base64decode(var.private_key_base64)  # 🔹 Updated to use base64 encoded key
     host        = self.public_ip
   }
 }
