@@ -6,8 +6,10 @@ resource "aws_instance" "blue" {
   security_groups = [var.ec2_security_group_id]
 
   tags = {
-    Name = "Blue-Instance"
-  }
+      Name        = "Blue-Instance"
+      Environment = "Blue-Green"
+    }
+
 
   provisioner "file" {
     source      = "${path.module}/scripts/install_dependencies.sh"
@@ -48,6 +50,7 @@ resource "aws_instance" "green" {
 
   tags = {
     Name = "Green-Instance"
+    Environment = "Blue-Green"
   }
 
   provisioner "file" {
@@ -79,3 +82,4 @@ resource "aws_instance" "green" {
     host        = self.public_ip
   }
 }
+
