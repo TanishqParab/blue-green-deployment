@@ -81,17 +81,16 @@ pipeline {
             }
         }
 
-
         stage('Switch Traffic to Green') {
             steps {
                 script {
                     def active_instance = sh(
-                        script: "aws ec2 describe-instances --filters \"Name=tag:Name,Values=Blue\" --query \"Reservations[*].Instances[*].InstanceId\" --output text",
+                        script: "aws ec2 describe-instances --filters \"Name=tag:Name,Values=Blue-Instance\" \"Name=tag:Environment,Values=Blue-Green\" --query \"Reservations[*].Instances[*].InstanceId\" --output text",
                         returnStdout: true
                     ).trim()
-                    
+
                     def standby_instance = sh(
-                        script: "aws ec2 describe-instances --filters \"Name=tag:Name,Values=Green\" --query \"Reservations[*].Instances[*].InstanceId\" --output text",
+                        script: "aws ec2 describe-instances --filters \"Name=tag:Name,Values=Green-Instance\" \"Name=tag:Environment,Values=Blue-Green\" --query \"Reservations[*].Instances[*].InstanceId\" --output text",
                         returnStdout: true
                     ).trim()
 
