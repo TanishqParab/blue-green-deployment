@@ -48,18 +48,25 @@ pipeline {
 
                     sleep(30)  // Ensure instances are ready
 
-                    echo "Deploying Python app to instances"
+                    echo "Retrieving instance IPs..."
                     def instances = sh(
                         script: """
                         aws ec2 describe-instances \
                         --filters "Name=tag:Environment,Values=Blue-Green" "Name=instance-state-name,Values=running" \
                         --query 'Reservations[*].Instances[*].PublicIpAddress' \
                         --output text
-                        """, 
+                        """,
                         returnStdout: true
-                    ).trim().split("\n")
-                    
-                    instances.each { instance ->
+                    ).trim()
+
+                    if (!instances) {
+                        error "No running instances found! Check AWS console and tagging."
+                    }
+
+                    def instanceList = instances.split("\n")
+
+                    instanceList.each { instance ->
+                        echo "Deploying to instance: ${instance}"
                         sshagent([SSH_KEY_ID]) {
                             sh """
                             echo "Copying app.py to ${instance}..."
@@ -73,6 +80,7 @@ pipeline {
                 }
             }
         }
+
 
         stage('Switch Traffic to Green') {
             steps {
