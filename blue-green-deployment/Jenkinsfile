@@ -29,7 +29,7 @@ pipeline {
                     dir("${TF_WORKING_DIR}") {
                         withCredentials([sshUserPrivateKey(credentialsId: 'blue-green-key', keyFileVariable: 'SSH_KEY')]) {
                             sh """
-                            export TF_VAR_private_key_path=\$SSH_KEY
+                            export TF_VAR_private_key_path=$SSH_KEY
                             terraform plan -out=tfplan
                             """
                         }
@@ -49,16 +49,24 @@ pipeline {
                     sleep(30)  // Ensure instances are ready
 
                     echo "Deploying Python app to instances"
-                    def instances = sh(script: "terraform output -raw instance_ips", returnStdout: true).trim().split("\n")
+                    def instances = sh(
+                        script: """
+                        aws ec2 describe-instances \
+                        --filters "Name=tag:Environment,Values=Blue-Green" "Name=instance-state-name,Values=running" \
+                        --query 'Reservations[*].Instances[*].PublicIpAddress' \
+                        --output text
+                        """, 
+                        returnStdout: true
+                    ).trim().split("\n")
                     
                     instances.each { instance ->
                         sshagent([SSH_KEY_ID]) {
                             sh """
                             echo "Copying app.py to ${instance}..."
-                            scp -o StrictHostKeyChecking=no ${TF_WORKING_DIR}/modules/ec2/scripts/app.py jenkins@${instance}:/home/jenkins/app.py
+                            scp -o StrictHostKeyChecking=no ${TF_WORKING_DIR}/modules/ec2/scripts/app.py ec2-user@${instance}:/home/ec2-user/app.py
 
                             echo "Starting Python app on ${instance}..."
-                            ssh jenkins@${instance} 'nohup python3 /home/jenkins/app.py > /home/jenkins/app.log 2>&1 &'
+                            ssh ec2-user@${instance} 'nohup python3 /home/ec2-user/app.py > /home/ec2-user/app.log 2>&1 &'
                             """
                         }
                     }
@@ -69,16 +77,22 @@ pipeline {
         stage('Switch Traffic to Green') {
             steps {
                 script {
-                    def active_instance = sh(script: "terraform output -raw active_instance", returnStdout: true).trim()
-                    def standby_instance = sh(script: "terraform output -raw standby_instance", returnStdout: true).trim()
+                    def active_instance = sh(
+                        script: "aws ec2 describe-instances --filters \"Name=tag:Name,Values=Blue\" --query \"Reservations[*].Instances[*].InstanceId\" --output text",
+                        returnStdout: true
+                    ).trim()
+                    
+                    def standby_instance = sh(
+                        script: "aws ec2 describe-instances --filters \"Name=tag:Name,Values=Green\" --query \"Reservations[*].Instances[*].InstanceId\" --output text",
+                        returnStdout: true
+                    ).trim()
 
                     echo "Switching traffic to Green instance: ${standby_instance}"
-
-                    sh "aws elbv2 register-targets --target-group-arn \$TARGET_GROUP_ARN --targets Id=${standby_instance} --region ${AWS_REGION}"
+                    sh "aws elbv2 register-targets --target-group-arn $TARGET_GROUP_ARN --targets Id=${standby_instance} --region ${AWS_REGION}"
                     sh "sleep 30"
 
                     echo "Deregistering Blue instance: ${active_instance}"
-                    sh "aws elbv2 deregister-targets --target-group-arn \$TARGET_GROUP_ARN --targets Id=${active_instance} --region ${AWS_REGION}"
+                    sh "aws elbv2 deregister-targets --target-group-arn $TARGET_GROUP_ARN --targets Id=${active_instance} --region ${AWS_REGION}"
                 }
             }
         }
