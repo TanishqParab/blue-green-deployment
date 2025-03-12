@@ -29,7 +29,7 @@ pipeline {
                     dir("${TF_WORKING_DIR}") {
                         withCredentials([sshUserPrivateKey(credentialsId: 'blue-green-key', keyFileVariable: 'SSH_KEY')]) {
                             sh """
-                            export TF_VAR_private_key_path=\$SSH_KEY
+                            export TF_VAR_private_key_path=$SSH_KEY
                             terraform plan -out=tfplan
                             """
                         }
@@ -38,40 +38,42 @@ pipeline {
             }
         }
 
-        stage('Apply Infrastructure') {
+        stage('Apply Infrastructure & Deploy App') {
             steps {
                 script {
-                    echo "Applying Terraform plan"
+                    echo "Applying Terraform plan and deploying app"
                     dir("${TF_WORKING_DIR}") {
                         sh 'terraform apply -auto-approve'
                     }
-                }
-            }
-        }
 
-        stage('Deploy Python App') {
-            steps {
-                script {
-                    echo "Waiting for Terraform outputs to be available..."
-                    sleep(30)  // Wait for Terraform state to be ready
+                    sleep(30)  // Ensure instances are ready
 
-                    def blue_instance = sh(script: "terraform output -raw blue_instance_public_ip", returnStdout: true).trim()
-                    def green_instance = sh(script: "terraform output -raw green_instance_public_ip", returnStdout: true).trim()
+                    echo "Retrieving instance IPs..."
+                    def instances = sh(
+                        script: """
+                        aws ec2 describe-instances \
+                        --filters "Name=tag:Environment,Values=Blue-Green" "Name=instance-state-name,Values=running" \
+                        --query 'Reservations[*].Instances[*].PublicIpAddress' \
+                        --output text
+                        """,
+                        returnStdout: true
+                    ).trim()
 
-                    if (!blue_instance || !green_instance) {
-                        error "Failed to fetch instance IPs. Ensure Terraform state has valid outputs."
+                    if (!instances) {
+                        error "No running instances found! Check AWS console and tagging."
                     }
 
-                    echo "Deploying app.py to instances: Blue (${blue_instance}), Green (${green_instance})"
+                    def instanceList = instances.split("\n")
 
-                    [blue_instance, green_instance].each { instance ->
+                    instanceList.each { instance ->
+                        echo "Deploying to instance: ${instance}"
                         sshagent([SSH_KEY_ID]) {
                             sh """
                             echo "Copying app.py to ${instance}..."
-                            scp -o StrictHostKeyChecking=no /var/lib/jenkins/workspace/blue-green-deployment-job/blue-green-deployment/modules/ec2/scripts/app.py jenkins@${instance}:/home/jenkins/app.py
+                            scp -o StrictHostKeyChecking=no ${TF_WORKING_DIR}/modules/ec2/scripts/app.py ec2-user@${instance}:/home/ec2-user/app.py
 
                             echo "Starting Python app on ${instance}..."
-                            ssh jenkins@${instance} 'nohup python3 /home/jenkins/app.py > /home/jenkins/app.log 2>&1 &'
+                            ssh ec2-user@${instance} 'nohup python3 /home/ec2-user/app.py > /home/ec2-user/app.log 2>&1 &'
                             """
                         }
                     }
@@ -79,19 +81,26 @@ pipeline {
             }
         }
 
+
         stage('Switch Traffic to Green') {
             steps {
                 script {
-                    def active_instance = sh(script: "terraform output -raw active_instance", returnStdout: true).trim()
-                    def standby_instance = sh(script: "terraform output -raw standby_instance", returnStdout: true).trim()
+                    def active_instance = sh(
+                        script: "aws ec2 describe-instances --filters \"Name=tag:Name,Values=Blue\" --query \"Reservations[*].Instances[*].InstanceId\" --output text",
+                        returnStdout: true
+                    ).trim()
+                    
+                    def standby_instance = sh(
+                        script: "aws ec2 describe-instances --filters \"Name=tag:Name,Values=Green\" --query \"Reservations[*].Instances[*].InstanceId\" --output text",
+                        returnStdout: true
+                    ).trim()
 
                     echo "Switching traffic to Green instance: ${standby_instance}"
-
-                    sh "aws elbv2 register-targets --target-group-arn \$TARGET_GROUP_ARN --targets Id=${standby_instance} --region ${AWS_REGION}"
+                    sh "aws elbv2 register-targets --target-group-arn $TARGET_GROUP_ARN --targets Id=${standby_instance} --region ${AWS_REGION}"
                     sh "sleep 30"
 
                     echo "Deregistering Blue instance: ${active_instance}"
-                    sh "aws elbv2 deregister-targets --target-group-arn \$TARGET_GROUP_ARN --targets Id=${active_instance} --region ${AWS_REGION}"
+                    sh "aws elbv2 deregister-targets --target-group-arn $TARGET_GROUP_ARN --targets Id=${active_instance} --region ${AWS_REGION}"
                 }
             }
         }
