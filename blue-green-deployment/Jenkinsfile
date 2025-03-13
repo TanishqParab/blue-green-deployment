@@ -95,32 +95,29 @@ pipeline {
         stage('Switch Traffic to Green') {
             steps {
                 script {
-                    def active_instance = sh(
+                    def blue_instance = sh(
                         script: "aws ec2 describe-instances --filters \"Name=tag:Name,Values=Blue-Instance\" \"Name=tag:Environment,Values=Blue-Green\" --query \"Reservations[*].Instances[*].InstanceId\" --output text",
                         returnStdout: true
                     ).trim()
 
-                    def standby_instances = sh(
-                        script: "aws ec2 describe-instances --filters \"Name=tag:Name,Values=Green-Instance\" \"Name=tag:Environment,Values=Blue-Green\" --query \"Reservations[*].Instances[*].InstanceId\" --output text",
+                    def green_instance = sh(
+                        script: "aws ec2 describe-instances --filters \"Name=tag:Name,Values=Green-Instance\" \"Name=tag:Environment,Values=Blue-Green\" --query \"Reservations[*].Instances[?State.Name==`running`].InstanceId\" --output text",
                         returnStdout: true
                     ).trim()
 
-                    if (!standby_instances) {
+                    if (!green_instance) {
                         error "No Green instances found! Check AWS console."
                     }
 
-                    standby_instances = standby_instances.trim().replaceAll(" +", " ")
+                    echo "Checking if Green instance (${green_instance}) is in 'running' state..."
+                    sh "aws ec2 wait instance-running --instance-ids ${green_instance} --no-cli-pager"
 
-
-                    echo "Checking if Green instances are in 'running' state..."
-                    sh "aws ec2 wait instance-running --instance-ids ${standby_instances}"
-
-                    echo "Registering Green instances (${standby_instances}) to Green Target Group..."
-                    sh 'aws elbv2 register-targets --target-group-arn "${env.GREEN_TG_ARN}" --targets $(echo ${standby_instances} | awk \'{for(i=1;i<=NF;i++) print "Id=" $i}\') --region "${env.AWS_REGION}"'
+                    echo "Registering Green instance (${green_instance}) to Green Target Group..."
+                    sh "aws elbv2 register-targets --target-group-arn \"${env.GREEN_TG_ARN}\" --targets Id=\"${green_instance}\" --region \"${env.AWS_REGION}\""
                     sh "sleep 30"
 
-                    echo "Deregistering Blue instance (${active_instance}) from Blue Target Group..."
-                    sh "aws elbv2 deregister-targets --target-group-arn \"${env.BLUE_TG_ARN}\" --targets Id=\"${active_instance}\" --region \"${env.AWS_REGION}\""
+                    echo "Deregistering Blue instance (${blue_instance}) from the load balancer but keeping it as standby..."
+                    sh "aws elbv2 deregister-targets --target-group-arn \"${env.BLUE_TG_ARN}\" --targets Id=\"${blue_instance}\" --region \"${env.AWS_REGION}\""
                 }
             }
         }
@@ -137,7 +134,7 @@ pipeline {
         stage('Destroy Infrastructure') {
             steps {
                 script {
-                    echo "Destroying Infrastructure..."
+                    echo "Destroying ALL Infrastructure (Blue & Green)..."
                     dir("${TF_WORKING_DIR}") {
                         sh 'terraform destroy -auto-approve'
                     }
