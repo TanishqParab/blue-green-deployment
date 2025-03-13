@@ -152,14 +152,13 @@ pipeline {
                     sh "aws elbv2 register-targets --target-group-arn \"${env.GREEN_TG_ARN}\" --targets Id=\"${green_instance}\" --region \"${env.AWS_REGION}\""
                     sh "sleep 30"
 
-                    // Deregister Blue instances dynamically
                     echo "Deregistering Blue instances..."
                     blue_instances.split("\n").each { instance_id ->
                         echo "Deregistering instance ${instance_id} from Blue Target Group..."
                         sh """
                         aws elbv2 deregister-targets \
                         --target-group-arn ${env.BLUE_TG_ARN} \
-                        --targets Id=${instance_id} \
+                        --targets '[{\"Id\":\"${instance_id}\"}]' \
                         --region ${env.AWS_REGION}
                         """
                     }
