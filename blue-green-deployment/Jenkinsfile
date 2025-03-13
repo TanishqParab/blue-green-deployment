@@ -82,22 +82,34 @@ pipeline {
             }
         }
 
-        stage('Retrieve Target Group ARN') {
+        stage('Retrieve Target Group ARNs') {
             steps {
                 script {
-                    def targetGroupArn = sh(
-                        script: """
-                        aws elbv2 describe-target-groups --names "blue-green-target-group" --query "TargetGroups[0].TargetGroupArn" --output text --region ${AWS_REGION}
-                        """,
+                    echo "Fetching Target Group ARNs..."
+
+                    def blue_tg_arn = sh(
+                        script: """aws elbv2 describe-target-groups \
+                        --names "blue-tg" \
+                        --query 'TargetGroups[0].TargetGroupArn' --output text""",
                         returnStdout: true
                     ).trim()
 
-                    if (!targetGroupArn) {
-                        error "Failed to retrieve Target Group ARN! Check AWS ELB configurations."
+                    def green_tg_arn = sh(
+                        script: """aws elbv2 describe-target-groups \
+                        --names "green-tg" \
+                        --query 'TargetGroups[0].TargetGroupArn' --output text""",
+                        returnStdout: true
+                    ).trim()
+
+                    if (!blue_tg_arn || !green_tg_arn) {
+                        error "Failed to retrieve Target Group ARNs. Check AWS target groups."
                     }
 
-                    echo "Target Group ARN: ${targetGroupArn}"
-                    env.TARGET_GROUP_ARN = targetGroupArn
+                    echo "Blue Target Group ARN: ${blue_tg_arn}"
+                    echo "Green Target Group ARN: ${green_tg_arn}"
+
+                    env.BLUE_TG_ARN = blue_tg_arn
+                    env.GREEN_TG_ARN = green_tg_arn
                 }
             }
         }
@@ -115,12 +127,12 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
-                    echo "Switching traffic to Green instance: ${standby_instance}"
-                    sh "aws elbv2 register-targets --target-group-arn ${env.TARGET_GROUP_ARN} --targets Id=${standby_instance} --region ${AWS_REGION}"
+                    echo "Registering Green instance (${standby_instance}) to Green Target Group..."
+                    sh "aws elbv2 register-targets --target-group-arn ${GREEN_TG_ARN} --targets Id=${standby_instance} --region ${AWS_REGION}"
                     sh "sleep 30"
 
-                    echo "Deregistering Blue instance: ${active_instance}"
-                    sh "aws elbv2 deregister-targets --target-group-arn ${env.TARGET_GROUP_ARN} --targets Id=${active_instance} --region ${AWS_REGION}"
+                    echo "Deregistering Blue instance (${active_instance}) from Blue Target Group..."
+                    sh "aws elbv2 deregister-targets --target-group-arn ${BLUE_TG_ARN} --targets Id=${active_instance} --region ${AWS_REGION}"
                 }
             }
         }
