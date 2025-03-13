@@ -171,15 +171,29 @@ pipeline {
                     }
 
                     // 20 seconds delay after deregistering Blue instances
+                    echo "Waiting for 20 seconds after deregistering Blue instances..."
                     sh "sleep 20"
 
-                    // Stopping Blue instances
+                    // Dynamically stop Blue instances if they are still in running state
                     echo "Stopping Blue instances..."
                     blue_instances.split("\n").each { instance_id ->
-                        echo "Stopping Blue instance ${instance_id}..."
-                        sh """
-                        aws ec2 stop-instances --instance-ids ${instance_id} --region ${env.AWS_REGION}
-                        """
+                        echo "Checking state for Blue instance ${instance_id}..."
+
+                        def instance_state = sh(
+                            script: """
+                            aws ec2 describe-instances --instance-ids ${instance_id} --query 'Reservations[0].Instances[0].State.Name' --output text
+                            """,
+                            returnStdout: true
+                        ).trim()
+
+                        if (instance_state == "running") {
+                            echo "Stopping Blue instance ${instance_id}..."
+                            sh """
+                            aws ec2 stop-instances --instance-ids ${instance_id} --region ${env.AWS_REGION}
+                            """
+                        } else {
+                            echo "Blue instance ${instance_id} is not in a 'running' state. Current state: ${instance_state}. Skipping stop operation."
+                        }
                     }
                 }
             }
