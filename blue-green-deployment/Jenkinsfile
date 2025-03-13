@@ -174,7 +174,7 @@ pipeline {
                     echo "Waiting for 20 seconds after deregistering Blue instances..."
                     sh "sleep 20"
 
-                    // Dynamically stop Blue instances if they are still in running state
+                    // Dynamically stop Blue instances if they are still in running state (No termination)
                     echo "Stopping Blue instances..."
                     blue_instances.split("\n").each { instance_id ->
                         echo "Checking state for Blue instance ${instance_id}..."
