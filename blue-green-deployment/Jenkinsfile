@@ -152,15 +152,21 @@ pipeline {
                     sh "aws elbv2 register-targets --target-group-arn \"${env.GREEN_TG_ARN}\" --targets Id=\"${green_instance}\" --region \"${env.AWS_REGION}\""
                     sh "sleep 30"
 
-                    echo "Deregistering Blue instances (${blue_instances})..."
-                    sh '''
-                    aws elbv2 deregister-targets --target-group-arn arn:aws:elasticloadbalancing:us-east-1:680549841444:targetgroup/blue-tg/6cf6af73f4f79f34 \
-                      --targets "[{\"Id\":\"i-084af6935accef9db\"}, {\"Id\":\"i-0d3acce652ccba07b\"}, {\"Id\":\"i-083234a0a15663b02\"}, {\"Id\":\"i-0f0c76e7105a88ffa\"}]" \
-                      --region us-east-1
-                    '''
+                    // Deregister Blue instances dynamically
+                    echo "Deregistering Blue instances..."
+                    blue_instances.split("\n").each { instance_id ->
+                        echo "Deregistering instance ${instance_id} from Blue Target Group..."
+                        sh """
+                        aws elbv2 deregister-targets \
+                        --target-group-arn ${env.BLUE_TG_ARN} \
+                        --targets Id=${instance_id} \
+                        --region ${env.AWS_REGION}
+                        """
+                    }
                 }
             }
         }
+        
         
         stage('Wait Before Destroy') {
             steps {
