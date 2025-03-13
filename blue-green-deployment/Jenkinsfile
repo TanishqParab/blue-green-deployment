@@ -133,12 +133,13 @@ pipeline {
                     ).trim()
 
                     def green_instance = sh(
-                        script: "aws ec2 describe-instances --filters \"Name=tag:Name,Values=Green-Instance\" \"Name=tag:Environment,Values=Blue-Green\" --query \"Reservations[*].Instances[?State.Name==`running`].InstanceId\" --output text",
+                        script: """aws ec2 describe-instances --filters "Name=tag:Name,Values=Green-Instance" "Name=tag:Environment,Values=Blue-Green" \
+                                   --query "Reservations[*].Instances[?State.Name=='running'].InstanceId[]" --output text""",
                         returnStdout: true
                     ).trim()
 
                     if (!green_instance) {
-                        error "No Green instances found! Check AWS console."
+                        error "No running Green instances found! Check AWS Console."
                     }
 
                     echo "Checking if Green instance (${green_instance}) is in 'running' state..."
@@ -153,7 +154,7 @@ pipeline {
                 }
             }
         }
-
+        
         stage('Wait Before Destroy') {
             steps {
                 script {
