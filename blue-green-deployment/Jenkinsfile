@@ -136,6 +136,9 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
+                    echo "Checking if Green instances are in 'running' state..."
+                    sh "aws ec2 wait instance-running --instance-ids ${standby_instance}"
+
                     echo "Registering Green instance (${standby_instance}) to Green Target Group..."
                     sh "aws elbv2 register-targets --target-group-arn ${GREEN_TG_ARN} --targets Id=${standby_instance} --region ${AWS_REGION}"
                     sh "sleep 30"
