@@ -124,6 +124,7 @@ pipeline {
             }
         }
 
+        
         stage('Switch Traffic to Green') {
             steps {
                 script {
@@ -152,6 +153,12 @@ pipeline {
                     sh "aws elbv2 register-targets --target-group-arn \"${env.GREEN_TG_ARN}\" --targets Id=\"${green_instance}\" --region \"${env.AWS_REGION}\""
                     sh "sleep 30"
 
+                    // Success message after Green deployment
+                    echo "Successfully deployed app on Green environment. Deregistering Blue instances..."
+
+                    // 5 seconds delay after the success message
+                    sh "sleep 5"
+
                     echo "Deregistering Blue instances..."
                     blue_instances.split("\n").each { instance_id ->
                         echo "Deregistering instance ${instance_id} from Blue Target Group..."
@@ -162,9 +169,22 @@ pipeline {
                         --region ${env.AWS_REGION}
                         """
                     }
+
+                    // 20 seconds delay after deregistering Blue instances
+                    sh "sleep 20"
+
+                    // Stopping Blue instances
+                    echo "Stopping Blue instances..."
+                    blue_instances.split("\n").each { instance_id ->
+                        echo "Stopping Blue instance ${instance_id}..."
+                        sh """
+                        aws ec2 stop-instances --instance-ids ${instance_id} --region ${env.AWS_REGION}
+                        """
+                    }
                 }
             }
         }
+
         
         
         stage('Wait Before Destroy') {
