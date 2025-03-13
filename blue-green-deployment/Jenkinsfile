@@ -109,13 +109,14 @@ pipeline {
                         error "No Green instances found! Check AWS console."
                     }
 
-                    standby_instances = standby_instances.replaceAll("\\s+", " ")
+                    standby_instances = standby_instances.trim().replaceAll(" +", " ")
+
 
                     echo "Checking if Green instances are in 'running' state..."
                     sh "aws ec2 wait instance-running --instance-ids ${standby_instances}"
 
                     echo "Registering Green instances (${standby_instances}) to Green Target Group..."
-                    sh "aws elbv2 register-targets --target-group-arn \"${env.GREEN_TG_ARN}\" --targets $(echo ${standby_instances} | awk '{for(i=1;i<=NF;i++) print \"Id=\" $i}') --region \"${env.AWS_REGION}\""
+                    sh 'aws elbv2 register-targets --target-group-arn "${env.GREEN_TG_ARN}" --targets $(echo ${standby_instances} | awk \'{for(i=1;i<=NF;i++) print "Id=" $i}\') --region "${env.AWS_REGION}"'
                     sh "sleep 30"
 
                     echo "Deregistering Blue instance (${active_instance}) from Blue Target Group..."
