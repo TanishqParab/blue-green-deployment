@@ -1,6 +1,6 @@
 pipeline {
     agent any
-
+    
     environment {
         AWS_REGION = "us-east-1"
         AWS_CREDENTIALS_ID = "aws-credentials"
@@ -9,6 +9,7 @@ pipeline {
         SSH_KEY_ID = "blue-green-key"
         PRIVATE_KEY = credentials('blue-green-key')  // Fetch SSH private key from Jenkins credentials
     }
+
 
     stages {
         stage('Initialize Terraform') {
@@ -21,7 +22,7 @@ pipeline {
                 }
             }
         }
-
+        
         stage('Plan Infrastructure') {
             steps {
                 script {
@@ -37,7 +38,7 @@ pipeline {
                 }
             }
         }
-
+        
         stage('Apply Infrastructure & Deploy App') {
             steps {
                 script {
@@ -46,7 +47,16 @@ pipeline {
                         sh 'terraform apply -auto-approve'
                     }
 
-                    sleep(30)  // Ensure instances are ready
+                    echo "Waiting for instances to start..."
+                    sleep(60)  // Give time for instances to fully boot
+
+                    echo "Checking instance states..."
+                    sh """
+                    aws ec2 describe-instances \
+                    --filters "Name=tag:Environment,Values=Blue-Green" \
+                    --query 'Reservations[*].Instances[*].[InstanceId, State.Name]' \
+                    --output table
+                    """
 
                     echo "Retrieving instance IPs..."
                     def instances = sh(
@@ -69,42 +79,94 @@ pipeline {
                         echo "Deploying to instance: ${instance}"
                         sshagent([SSH_KEY_ID]) {
                             sh """
-                            echo "Copying app.py to ${instance}..."
+                            echo "Copying app.py and setup script to ${instance}..."
                             scp -o StrictHostKeyChecking=no ${TF_WORKING_DIR}/modules/ec2/scripts/app.py ec2-user@${instance}:/home/ec2-user/app.py
+                            scp -o StrictHostKeyChecking=no ${TF_WORKING_DIR}/modules/ec2/scripts/setup_flask_service.py ec2-user@${instance}:/home/ec2-user/setup_flask_service.py
 
-                            echo "Starting Python app on ${instance}..."
-                            ssh ec2-user@${instance} 'nohup python3 /home/ec2-user/app.py > /home/ec2-user/app.log 2>&1 &'
+                            echo "Running setup script on ${instance}..."
+                            ssh ec2-user@${instance} 'chmod +x /home/ec2-user/setup_flask_service.py && sudo python3 /home/ec2-user/setup_flask_service.py'
                             """
                         }
                     }
                 }
             }
         }
-
-
-        stage('Switch Traffic to Green') {
+        
+        stage('Retrieve Target Group ARNs') {
             steps {
                 script {
-                    def active_instance = sh(
-                        script: "aws ec2 describe-instances --filters \"Name=tag:Name,Values=Blue\" --query \"Reservations[*].Instances[*].InstanceId\" --output text",
-                        returnStdout: true
-                    ).trim()
-                    
-                    def standby_instance = sh(
-                        script: "aws ec2 describe-instances --filters \"Name=tag:Name,Values=Green\" --query \"Reservations[*].Instances[*].InstanceId\" --output text",
+                    echo "Fetching Target Group ARNs..."
+
+                    def blue_tg_arn = sh(
+                        script: """aws elbv2 describe-target-groups \
+                        --names "blue-tg" \
+                        --query 'TargetGroups[0].TargetGroupArn' --output text""",
                         returnStdout: true
                     ).trim()
 
-                    echo "Switching traffic to Green instance: ${standby_instance}"
-                    sh "aws elbv2 register-targets --target-group-arn $TARGET_GROUP_ARN --targets Id=${standby_instance} --region ${AWS_REGION}"
-                    sh "sleep 30"
+                    def green_tg_arn = sh(
+                        script: """aws elbv2 describe-target-groups \
+                        --names "green-tg" \
+                        --query 'TargetGroups[0].TargetGroupArn' --output text""",
+                        returnStdout: true
+                    ).trim()
 
-                    echo "Deregistering Blue instance: ${active_instance}"
-                    sh "aws elbv2 deregister-targets --target-group-arn $TARGET_GROUP_ARN --targets Id=${active_instance} --region ${AWS_REGION}"
+                    if (!blue_tg_arn || !green_tg_arn) {
+                        error "Failed to retrieve Target Group ARNs. Check AWS target groups."
+                    }
+
+                    echo "Blue Target Group ARN: ${blue_tg_arn}"
+                    echo "Green Target Group ARN: ${green_tg_arn}"
+
+                    env.BLUE_TG_ARN = blue_tg_arn
+                    env.GREEN_TG_ARN = green_tg_arn
                 }
             }
         }
 
+        stage('Switch Traffic to Green') {
+            steps {
+                script {
+                    def blue_instances = sh(
+                        script: """
+                        aws ec2 describe-instances \
+                        --filters "Name=tag:Name,Values=Blue-Instance" "Name=tag:Environment,Values=Blue-Green" \
+                        --query "Reservations[*].Instances[*].InstanceId" --output text
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    def green_instance = sh(
+                        script: """
+                        aws ec2 describe-instances --filters "Name=tag:Name,Values=Green-Instance" "Name=tag:Environment,Values=Blue-Green" \
+                        --query "Reservations[*].Instances[?State.Name=='running'].InstanceId[]" --output text
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    if (!green_instance) {
+                        error "No running Green instances found! Check AWS Console."
+                    }
+
+                    sh "aws ec2 wait instance-running --instance-ids ${green_instance} --no-cli-pager"
+                    sh "aws elbv2 register-targets --target-group-arn \"${env.GREEN_TG_ARN}\" --targets Id=\"${green_instance}\" --region \"${env.AWS_REGION}\""
+                    sh "sleep 30"
+
+                    echo "Deregistering Blue instances..."
+                    blue_instances.split("\n").each { instance_id ->
+                        echo "Deregistering instance ${instance_id} from Blue Target Group..."
+                        sh """
+                        aws elbv2 deregister-targets \
+                        --target-group-arn ${env.BLUE_TG_ARN} \
+                        --targets '[{\"Id\":\"${instance_id}\"}]' \
+                        --region ${env.AWS_REGION}
+                        """
+                    }
+                }
+            }
+        }
+        
+        
         stage('Wait Before Destroy') {
             steps {
                 script {
@@ -117,7 +179,7 @@ pipeline {
         stage('Destroy Infrastructure') {
             steps {
                 script {
-                    echo "Destroying Infrastructure..."
+                    echo "Destroying ALL Infrastructure (Blue & Green)..."
                     dir("${TF_WORKING_DIR}") {
                         sh 'terraform destroy -auto-approve'
                     }
