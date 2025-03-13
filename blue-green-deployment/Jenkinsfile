@@ -128,11 +128,11 @@ pipeline {
                     ).trim()
 
                     echo "Registering Green instance (${standby_instance}) to Green Target Group..."
-                    sh "aws elbv2 register-targets --target-group-arn ${GREEN_TG_ARN} --targets Id=${standby_instance} --region ${AWS_REGION}"
+                    sh "aws elbv2 register-targets --target-group-arn ${env.GREEN_TG_ARN} --targets Id=${standby_instance} --region ${AWS_REGION}"
                     sh "sleep 30"
 
                     echo "Deregistering Blue instance (${active_instance}) from Blue Target Group..."
-                    sh "aws elbv2 deregister-targets --target-group-arn ${BLUE_TG_ARN} --targets Id=${active_instance} --region ${AWS_REGION}"
+                    sh "aws elbv2 deregister-targets --target-group-arn ${env.BLUE_TG_ARN} --targets Id=${active_instance} --region ${AWS_REGION}"
                 }
             }
         }
