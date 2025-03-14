@@ -1,4 +1,7 @@
 pipeline {
+    triggers {
+        cron('TZ=Asia/Kolkata\n30 4 * * *\n30 17 * * *')
+    }
     agent any
     
     environment {
