@@ -124,59 +124,25 @@ pipeline {
             }
         }
 
-        
         stage('Switch Traffic to Green') {
             steps {
                 script {
-                    def blue_instances = sh(
-                        script: """
-                        aws ec2 describe-instances \
-                        --filters "Name=tag:Name,Values=Blue-Instance" "Name=tag:Environment,Values=Blue-Green" \
-                        --query "Reservations[*].Instances[*].InstanceId" --output text
-                        """,
-                        returnStdout: true
-                    ).trim()
+                    echo "Waiting for Green instance to be fully running..."
+                    sh "aws ec2 wait instance-running --instance-ids ${env.GREEN_INSTANCE} --no-cli-pager"
 
-                    def green_instance = sh(
-                        script: """
-                        aws ec2 describe-instances --filters "Name=tag:Name,Values=Green-Instance" "Name=tag:Environment,Values=Blue-Green" \
-                        --query "Reservations[*].Instances[?State.Name=='running'].InstanceId[]" --output text
-                        """,
-                        returnStdout: true
-                    ).trim()
+                    echo "Registering Green instance (${env.GREEN_INSTANCE}) to Green Target Group..."
+                    sh """
+                    aws elbv2 register-targets \
+                    --target-group-arn \"${env.GREEN_TG_ARN}\" \
+                    --targets Id=\"${env.GREEN_INSTANCE}\" \
+                    --region \"${env.AWS_REGION}\"
+                    """
 
-                    if (!green_instance) {
-                        error "No running Green instances found! Check AWS Console."
-                    }
+                    sleep(30)
 
-                    sh "aws ec2 wait instance-running --instance-ids ${green_instance} --no-cli-pager"
-                    sh "aws elbv2 register-targets --target-group-arn \"${env.GREEN_TG_ARN}\" --targets Id=\"${green_instance}\" --region \"${env.AWS_REGION}\""
-                    sh "sleep 30"
+                    echo "Successfully deployed app on Green environment. Stopping Blue instances..."
 
-                    // Success message after Green deployment
-                    echo "Successfully deployed app on Green environment. Deregistering Blue instances..."
-
-                    // 5 seconds delay after the success message
-                    sh "sleep 5"
-
-                    echo "Deregistering Blue instances..."
-                    blue_instances.split("\n").each { instance_id ->
-                        echo "Deregistering instance ${instance_id} from Blue Target Group..."
-                        sh """
-                        aws elbv2 deregister-targets \
-                        --target-group-arn ${env.BLUE_TG_ARN} \
-                        --targets '[{\"Id\":\"${instance_id}\"}]' \
-                        --region ${env.AWS_REGION}
-                        """
-                    }
-
-                    // 20 seconds delay after deregistering Blue instances
-                    echo "Waiting for 20 seconds after deregistering Blue instances..."
-                    sh "sleep 20"
-
-                    // Dynamically stop Blue instances if they are still in running state (No termination)
-                    echo "Stopping Blue instances..."
-                    blue_instances.split("\n").each { instance_id ->
+                    env.BLUE_INSTANCES.split().each { instance_id ->
                         echo "Checking state for Blue instance ${instance_id}..."
 
                         def instance_state = sh(
@@ -192,7 +158,7 @@ pipeline {
                             aws ec2 stop-instances --instance-ids ${instance_id} --region ${env.AWS_REGION}
                             """
                         } else {
-                            echo "Blue instance ${instance_id} is not in a 'running' state. Current state: ${instance_state}. Skipping stop operation."
+                            echo "Blue instance ${instance_id} is already in state: ${instance_state}. Skipping stop operation."
                         }
                     }
                 }
