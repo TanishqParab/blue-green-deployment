@@ -10,6 +10,7 @@ pipeline {
         PRIVATE_KEY = credentials('blue-green-key')  // Fetch SSH private key from Jenkins credentials
     }
 
+
     stages {
         stage('Initialize Terraform') {
             steps {
@@ -56,6 +57,37 @@ pipeline {
                     --query 'Reservations[*].Instances[*].[InstanceId, State.Name]' \
                     --output table
                     """
+
+                    echo "Retrieving instance IPs..."
+                    def instances = sh(
+                        script: """
+                        aws ec2 describe-instances \
+                        --filters "Name=tag:Environment,Values=Blue-Green" "Name=instance-state-name,Values=running" \
+                        --query 'Reservations[*].Instances[*].PublicIpAddress' \
+                        --output text
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    if (!instances) {
+                        error "No running instances found! Check AWS console and tagging."
+                    }
+
+                    def instanceList = instances.split("\n")
+
+                    instanceList.each { instance ->
+                        echo "Deploying to instance: ${instance}"
+                        sshagent([SSH_KEY_ID]) {
+                            sh """
+                            echo "Copying app.py and setup script to ${instance}..."
+                            scp -o StrictHostKeyChecking=no ${TF_WORKING_DIR}/modules/ec2/scripts/app.py ec2-user@${instance}:/home/ec2-user/app.py
+                            scp -o StrictHostKeyChecking=no ${TF_WORKING_DIR}/modules/ec2/scripts/setup_flask_service.py ec2-user@${instance}:/home/ec2-user/setup_flask_service.py
+
+                            echo "Running setup script on ${instance}..."
+                            ssh ec2-user@${instance} 'chmod +x /home/ec2-user/setup_flask_service.py && sudo python3 /home/ec2-user/setup_flask_service.py'
+                            """
+                        }
+                    }
                 }
             }
         }
@@ -105,10 +137,8 @@ pipeline {
                         returnStdout: true
                     ).trim()
                     
-                    // Debugging: Print Green Instance ID
                     echo "Fetched Green Instance ID: '${green_instance}'"
                     
-                    // Check if green_instance is empty
                     if (!green_instance || green_instance == "null") {
                         error "No running Green instances found! Verify AWS Console."
                     }
@@ -126,9 +156,32 @@ pipeline {
                     """
 
                     sleep(30)
+
+                    echo "Fetching and stopping running Blue instances..."
+                    def blue_instances = sh(
+                        script: """
+                        aws ec2 describe-instances \
+                        --filters "Name=tag:Name,Values=Blue-Instance" "Name=tag:Environment,Values=Blue-Green" "Name=instance-state-name,Values=running" \
+                        --query "Reservations[*].Instances[*].InstanceId" --output text
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    echo "Fetched Blue Instance IDs: '${blue_instances}'"
+                    
+                    if (blue_instances) {
+                        blue_instances.split().each { instance_id ->
+                            echo "Stopping Blue instance ${instance_id}..."
+                            sh "aws ec2 stop-instances --instance-ids ${instance_id} --region ${env.AWS_REGION}"
+                        }
+                    } else {
+                        echo "No running Blue instances found."
+                    }
                 }
             }
         }
+        
+        
         
         stage('Wait Before Destroy') {
             steps {
