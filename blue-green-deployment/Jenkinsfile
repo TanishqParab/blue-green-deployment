@@ -137,8 +137,10 @@ pipeline {
                         returnStdout: true
                     ).trim()
                     
+                    // Debugging: Print Green Instance ID
                     echo "Fetched Green Instance ID: '${green_instance}'"
                     
+                    // Check if green_instance is empty
                     if (!green_instance || green_instance == "null") {
                         error "No running Green instances found! Verify AWS Console."
                     }
@@ -156,31 +158,36 @@ pipeline {
                     """
 
                     sleep(30)
-
-                    echo "Fetching and stopping running Blue instances..."
+                }
+            }
+        }
+        
+        stage('Stop Blue Instances') {
+            steps {
+                script {
+                    echo "Fetching Running Blue Instances..."
                     def blue_instances = sh(
                         script: """
                         aws ec2 describe-instances \
-                        --filters "Name=tag:Name,Values=Blue-Instance" "Name=tag:Environment,Values=Blue-Green" "Name=instance-state-name,Values=running" \
+                        --filters "Name=tag:Name,Values=Blue-Instance" "Name=instance-state-name,Values=running" \
                         --query "Reservations[*].Instances[*].InstanceId" --output text
                         """,
                         returnStdout: true
                     ).trim()
 
-                    echo "Fetched Blue Instance IDs: '${blue_instances}'"
-                    
-                    if (blue_instances) {
-                        blue_instances.split().each { instance_id ->
-                            echo "Stopping Blue instance ${instance_id}..."
-                            sh "aws ec2 stop-instances --instance-ids ${instance_id} --region ${env.AWS_REGION}"
-                        }
-                    } else {
+                    if (!blue_instances) {
                         echo "No running Blue instances found."
+                    } else {
+                        blue_instances.split().each { instance_id ->
+                            echo "Stopping Blue instance: ${instance_id}..."
+                            sh "aws ec2 stop-instances --instance-ids ${instance_id} --region ${env.AWS_REGION}"
+                            sleep(15) // Wait 15 seconds for the instance to stop
+                            echo "Blue instance ${instance_id} successfully stopped."
+                        }
                     }
                 }
             }
         }
-        
         
         
         stage('Wait Before Destroy') {
