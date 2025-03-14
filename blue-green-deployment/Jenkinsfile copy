@@ -12,6 +12,12 @@ pipeline {
 
 
     stages {
+        stage('checkout') {
+            steps {
+                checkout scmGit(branches: [[name: 'main']], extensions: [], userRemoteConfigs: [[url: 'https://github.com/TanishqParab/blue-green-deployment']])
+            }
+        }
+        
         stage('Initialize Terraform') {
             steps {
                 script {
@@ -123,44 +129,67 @@ pipeline {
                 }
             }
         }
-
+        
         stage('Switch Traffic to Green') {
             steps {
                 script {
+                    echo "Retrieving Green Instance ID..."
+                    def green_instance = sh(
+                        script: """
+                        aws ec2 describe-instances \
+                        --filters "Name=tag:Name,Values=Green-Instance" "Name=tag:Environment,Values=Blue-Green" "Name=instance-state-name,Values=running" \
+                        --query "Reservations[*].Instances[*].InstanceId" --output text
+                        """,
+                        returnStdout: true
+                    ).trim()
+                    
+                    // Debugging: Print Green Instance ID
+                    echo "Fetched Green Instance ID: '${green_instance}'"
+                    
+                    // Check if green_instance is empty
+                    if (!green_instance || green_instance == "null") {
+                        error "No running Green instances found! Verify AWS Console."
+                    }
+                    env.GREEN_INSTANCE = green_instance
+                    
+                    echo "Waiting for Green instance to be fully running..."
+                    sh "aws ec2 wait instance-running --instance-ids ${env.GREEN_INSTANCE} --no-cli-pager"
+
+                    echo "Registering Green instance (${env.GREEN_INSTANCE}) to Green Target Group..."
+                    sh """
+                    aws elbv2 register-targets \
+                    --target-group-arn "${env.GREEN_TG_ARN}" \
+                    --targets Id="${env.GREEN_INSTANCE}" \
+                    --region "${env.AWS_REGION}"
+                    """
+
+                    sleep(30)
+                }
+            }
+        }
+        
+        stage('Stop Blue Instances') {
+            steps {
+                script {
+                    echo "Fetching Running Blue Instances..."
                     def blue_instances = sh(
                         script: """
                         aws ec2 describe-instances \
-                        --filters "Name=tag:Name,Values=Blue-Instance" "Name=tag:Environment,Values=Blue-Green" \
+                        --filters "Name=tag:Name,Values=Blue-Instance" "Name=instance-state-name,Values=running" \
                         --query "Reservations[*].Instances[*].InstanceId" --output text
                         """,
                         returnStdout: true
                     ).trim()
 
-                    def green_instance = sh(
-                        script: """
-                        aws ec2 describe-instances --filters "Name=tag:Name,Values=Green-Instance" "Name=tag:Environment,Values=Blue-Green" \
-                        --query "Reservations[*].Instances[?State.Name=='running'].InstanceId[]" --output text
-                        """,
-                        returnStdout: true
-                    ).trim()
-
-                    if (!green_instance) {
-                        error "No running Green instances found! Check AWS Console."
-                    }
-
-                    sh "aws ec2 wait instance-running --instance-ids ${green_instance} --no-cli-pager"
-                    sh "aws elbv2 register-targets --target-group-arn \"${env.GREEN_TG_ARN}\" --targets Id=\"${green_instance}\" --region \"${env.AWS_REGION}\""
-                    sh "sleep 30"
-
-                    echo "Deregistering Blue instances..."
-                    blue_instances.split("\n").each { instance_id ->
-                        echo "Deregistering instance ${instance_id} from Blue Target Group..."
-                        sh """
-                        aws elbv2 deregister-targets \
-                        --target-group-arn ${env.BLUE_TG_ARN} \
-                        --targets '[{\"Id\":\"${instance_id}\"}]' \
-                        --region ${env.AWS_REGION}
-                        """
+                    if (!blue_instances) {
+                        echo "No running Blue instances found."
+                    } else {
+                        blue_instances.split().each { instance_id ->
+                            echo "Stopping Blue instance: ${instance_id}..."
+                            sh "aws ec2 stop-instances --instance-ids ${instance_id} --region ${env.AWS_REGION}"
+                            sleep(15) // Wait 15 seconds for the instance to stop
+                            echo "Blue instance ${instance_id} successfully stopped."
+                        }
                     }
                 }
             }
