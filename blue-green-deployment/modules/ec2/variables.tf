@@ -37,3 +37,10 @@ variable "public_key_path" {
   description = "Path to the public SSH key"
   type        = string
 }
+
+# In modules/ec2/variables.tf
+variable "app_version" {
+  description = "Version of the Python application"
+  type        = string
+  default     = "latest"
+}
