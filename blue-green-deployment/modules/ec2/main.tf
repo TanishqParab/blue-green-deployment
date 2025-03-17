@@ -10,14 +10,13 @@ resource "aws_instance" "blue" {
       Environment = "Blue-Green"
     }
 
-
   provisioner "file" {
     source      = "${path.module}/scripts/install_dependencies.sh"
     destination = "/home/ec2-user/install_dependencies.sh"
   }
 
   provisioner "file" {
-    source      = "${path.module}/scripts/app.py"
+    source      = "${path.module}/scripts/app-${var.app_version}.py"
     destination = "/home/ec2-user/app.py"
   }
 
@@ -49,7 +48,7 @@ resource "aws_instance" "green" {
   security_groups = [var.ec2_security_group_id]
 
   tags = {
-    Name = "Green-Instance"
+    Name        = "Green-Instance"
     Environment = "Blue-Green"
   }
 
@@ -59,7 +58,7 @@ resource "aws_instance" "green" {
   }
 
   provisioner "file" {
-    source      = "${path.module}/scripts/app.py"
+    source      = "${path.module}/scripts/app-${var.app_version}.py"
     destination = "/home/ec2-user/app.py"
   }
 
@@ -82,4 +81,3 @@ resource "aws_instance" "green" {
     host        = self.public_ip
   }
 }
-
