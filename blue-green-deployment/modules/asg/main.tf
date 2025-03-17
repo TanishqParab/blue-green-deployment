@@ -51,7 +51,7 @@ EOF
 
 
 
-resource "aws_autoscaling_group" "green" {
+resource "aws_autoscaling_group" "blue" {
   desired_capacity     = 1
   max_size            = 1
   min_size            = 1
