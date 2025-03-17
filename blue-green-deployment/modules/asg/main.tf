@@ -20,7 +20,7 @@ sudo pip3 install flask
 # Clone your GitHub repository
 mkdir -p /home/ec2-user/app
 cd /home/ec2-user/app
-git clone https://github.com/your-username/your-repo.git .
+git clone https://github.com/TanishqParab/blue-green-deployment.git .
 
 # Set permissions
 sudo chown -R ec2-user:ec2-user /home/ec2-user/app
@@ -51,7 +51,7 @@ EOF
 
 
 
-resource "aws_autoscaling_group" "blue" {
+resource "aws_autoscaling_group" "green" {
   desired_capacity     = 1
   max_size            = 1
   min_size            = 1
@@ -63,3 +63,4 @@ resource "aws_autoscaling_group" "blue" {
     version = "$Latest"
   }
 }
+
