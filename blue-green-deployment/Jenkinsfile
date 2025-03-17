@@ -1,6 +1,6 @@
 pipeline {
     triggers {
-        cron('TZ=Asia/Kolkata\n30 4 * * *\n30 17 * * *')
+        cron('TZ=Asia/Kolkata\n25 12 * * *\n00 13 * * *')
     }
     
     agent any
@@ -12,48 +12,41 @@ pipeline {
         APP_FILE = "app.py"
         SSH_KEY_ID = "blue-green-key"
         PRIVATE_KEY = credentials('blue-green-key')  // Fetch SSH private key from Jenkins credentials
-        EXECUTION_TYPE = ''
     }
-
-     
 
 
     stages {
-        stage('Determine Execution Type') {
+        stage('Set Execution Type') {
+            agent any
             steps {
                 script {
-                    def currentHour = sh(script: "TZ=Asia/Kolkata date +'%H'", returnStdout: true).trim().toInteger()
-                    if (currentHour == 10) {
+                    def currentHour = sh(script: "TZ=Asia/Kolkata date +'%H'", returnStdout: true).trim()
+                    echo "Current Hour in IST: ${currentHour}"
+
+                    if (currentHour == "12") {
                         env.EXECUTION_TYPE = 'DEPLOY'
-                    } else if (currentHour == 23) {
+                    } else if (currentHour == "13") {
                         env.EXECUTION_TYPE = 'DESTROY'
+                    } else {
+                        env.EXECUTION_TYPE = 'NONE'
                     }
                     echo "Execution Type: ${env.EXECUTION_TYPE}"
                 }
             }
         }
         
-        
-        
-
         stage('checkout') {
-
             when {
-                expression { env.EXECUTION_TYPE == 'DEPLOY' }
+                expression { env.EXECUTION_TYPE?.trim() == 'DEPLOY' }
             }
             steps {
                 checkout scmGit(branches: [[name: 'main']], extensions: [], userRemoteConfigs: [[url: 'https://github.com/TanishqParab/blue-green-deployment']])
             }
         }
-
-         
-
-
-
-
+        
         stage('Initialize Terraform') {
             when {
-                expression { env.EXECUTION_TYPE == 'DEPLOY' }
+                expression { env.EXECUTION_TYPE?.trim() == 'DEPLOY' }
             }
             steps {
                 script {
@@ -67,7 +60,7 @@ pipeline {
         
         stage('Plan Infrastructure') {
             when {
-                expression { env.EXECUTION_TYPE == 'DEPLOY' }
+                expression { env.EXECUTION_TYPE?.trim() == 'DEPLOY' }
             }
             steps {
                 script {
@@ -86,7 +79,7 @@ pipeline {
         
         stage('Apply Infrastructure & Deploy App') {
             when {
-                expression { env.EXECUTION_TYPE == 'DEPLOY' }
+                expression { env.EXECUTION_TYPE?.trim() == 'DEPLOY' }
             }
             steps {
                 script {
@@ -142,7 +135,7 @@ pipeline {
         
         stage('Retrieve Target Group ARNs') {
             when {
-                expression { env.EXECUTION_TYPE == 'DEPLOY' }
+                expression { env.EXECUTION_TYPE?.trim() == 'DEPLOY' }
             }
             steps {
                 script {
@@ -177,7 +170,7 @@ pipeline {
         
         stage('Switch Traffic to Green') {
             when {
-                expression { env.EXECUTION_TYPE == 'DEPLOY' }
+                expression { env.EXECUTION_TYPE?.trim() == 'DEPLOY' }
             }
             steps {
                 script {
@@ -218,7 +211,7 @@ pipeline {
         
         stage('Stop Blue Instances') {
             when {
-                expression { env.EXECUTION_TYPE == 'DEPLOY' }
+                expression { env.EXECUTION_TYPE?.trim() == 'DEPLOY' }
             }
             steps {
                 script {
@@ -260,8 +253,9 @@ pipeline {
 
         stage('Destroy Infrastructure') {
             when {
-                expression { env.EXECUTION_TYPE == 'DESTROY' }
+                expression { return env.EXECUTION_TYPE == 'DESTROY' }
             }
+            agent any
             steps {
                 script {
                     echo "Destroying ALL Infrastructure (Blue & Green)..."
