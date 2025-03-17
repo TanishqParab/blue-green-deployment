@@ -2,6 +2,7 @@ pipeline {
     triggers {
         cron('TZ=Asia/Kolkata\n30 4 * * *\n30 17 * * *')
     }
+    
     agent any
     
     environment {
@@ -11,11 +12,49 @@ pipeline {
         APP_FILE = "app.py"
         SSH_KEY_ID = "blue-green-key"
         PRIVATE_KEY = credentials('blue-green-key')  // Fetch SSH private key from Jenkins credentials
+        EXECUTION_TYPE = ''
     }
+
+     
 
 
     stages {
+        stage('Determine Execution Type') {
+            steps {
+                script {
+                    def currentHour = sh(script: "TZ=Asia/Kolkata date +'%H'", returnStdout: true).trim().toInteger()
+                    if (currentHour == 10) {
+                        env.EXECUTION_TYPE = 'DEPLOY'
+                    } else if (currentHour == 23) {
+                        env.EXECUTION_TYPE = 'DESTROY'
+                    }
+                    echo "Execution Type: ${env.EXECUTION_TYPE}"
+                }
+            }
+        }
+        
+        
+        
+
+        stage('checkout') {
+
+            when {
+                expression { env.EXECUTION_TYPE == 'DEPLOY' }
+            }
+            steps {
+                checkout scmGit(branches: [[name: 'main']], extensions: [], userRemoteConfigs: [[url: 'https://github.com/TanishqParab/blue-green-deployment']])
+            }
+        }
+
+         
+
+
+
+
         stage('Initialize Terraform') {
+            when {
+                expression { env.EXECUTION_TYPE == 'DEPLOY' }
+            }
             steps {
                 script {
                     echo "Initializing Terraform in ${TF_WORKING_DIR}"
@@ -27,6 +66,9 @@ pipeline {
         }
         
         stage('Plan Infrastructure') {
+            when {
+                expression { env.EXECUTION_TYPE == 'DEPLOY' }
+            }
             steps {
                 script {
                     echo "Running Terraform plan"
@@ -43,6 +85,9 @@ pipeline {
         }
         
         stage('Apply Infrastructure & Deploy App') {
+            when {
+                expression { env.EXECUTION_TYPE == 'DEPLOY' }
+            }
             steps {
                 script {
                     echo "Applying Terraform plan and deploying app"
@@ -96,6 +141,9 @@ pipeline {
         }
         
         stage('Retrieve Target Group ARNs') {
+            when {
+                expression { env.EXECUTION_TYPE == 'DEPLOY' }
+            }
             steps {
                 script {
                     echo "Fetching Target Group ARNs..."
@@ -126,8 +174,11 @@ pipeline {
                 }
             }
         }
-
+        
         stage('Switch Traffic to Green') {
+            when {
+                expression { env.EXECUTION_TYPE == 'DEPLOY' }
+            }
             steps {
                 script {
                     echo "Retrieving Green Instance ID..."
@@ -166,6 +217,9 @@ pipeline {
         }
         
         stage('Stop Blue Instances') {
+            when {
+                expression { env.EXECUTION_TYPE == 'DEPLOY' }
+            }
             steps {
                 script {
                     echo "Fetching Running Blue Instances..."
@@ -192,7 +246,7 @@ pipeline {
             }
         }
         
-        
+        /* 
         stage('Wait Before Destroy') {
             steps {
                 script {
@@ -202,7 +256,12 @@ pipeline {
             }
         }
 
+        */
+
         stage('Destroy Infrastructure') {
+            when {
+                expression { env.EXECUTION_TYPE == 'DESTROY' }
+            }
             steps {
                 script {
                     echo "Destroying ALL Infrastructure (Blue & Green)..."
