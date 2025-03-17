@@ -36,3 +36,12 @@ variable "availability_zones" {
 variable "instance_type" {
   default = "t3.micro"
 }
+
+#changes
+
+# In root variables.tf
+variable "app_version" {
+  description = "Version of the Python application"
+  type        = string
+  default     = "latest"
+}
