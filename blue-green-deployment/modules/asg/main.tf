@@ -34,7 +34,7 @@ After=network.target
 [Service]
 User=ec2-user
 WorkingDirectory=/home/ec2-user/app
-ExecStart=/usr/bin/python3 /home/ec2-user/app/app.py
+ExecStart=/usr/bin/python3 /home/ec2-user/app/blue-green-deployment/modules/ec2/scripts/app.py
 Restart=always
 
 [Install]
@@ -52,7 +52,7 @@ EOF
 
 
 resource "aws_autoscaling_group" "blue" {
-  desired_capacity     = 1
+  desired_capacity     = 2
   max_size            = 1
   min_size            = 1
   vpc_zone_identifier = var.subnet_ids
