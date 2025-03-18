@@ -1,0 +1,91 @@
+pipeline {
+    agent any
+    
+    environment {
+        AWS_REGION = "us-east-1"
+        AWS_CREDENTIALS_ID = "aws-credentials"
+        TF_WORKING_DIR = "/var/lib/jenkins/workspace/blue-green-deployment-job/blue-green-deployment"
+        APP_FILE = "app.py"
+        SSH_KEY_ID = "blue-green-key"
+        PRIVATE_KEY = credentials('blue-green-key')  // Fetch SSH private key from Jenkins credentials
+    }
+
+
+    stages {
+        stage('checkout') {
+            steps {
+                checkout scmGit(branches: [[name: 'main']], extensions: [], userRemoteConfigs: [[url: 'https://github.com/TanishqParab/blue-green-deployment']])
+            }
+        }
+        
+        stage('Initialize Terraform') {
+            steps {
+                script {
+                    echo "Initializing Terraform in ${TF_WORKING_DIR}"
+                    dir("${TF_WORKING_DIR}") {
+                        sh 'terraform init'
+                    }
+                }
+            }
+        }
+        
+        stage('Plan Infrastructure') {
+            steps {
+                script {
+                    echo "Running Terraform plan"
+                    dir("${TF_WORKING_DIR}") {
+                        withCredentials([sshUserPrivateKey(credentialsId: 'blue-green-key', keyFileVariable: 'SSH_KEY')]) {
+                            sh """
+                            export TF_VAR_private_key_path=$SSH_KEY
+                            terraform plan -out=tfplan
+                            """
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Apply Infrastructure & Deploy App') {
+            steps {
+                script {
+                    echo "Applying Terraform plan and deploying app"
+                    dir("${TF_WORKING_DIR}") {
+                        sh 'terraform apply -auto-approve'
+                    }
+
+                    sleep(30)  // Ensure instances are ready
+
+                    echo "Retrieving instance IPs..."
+                    def instances = sh(
+                        script: """
+                        aws ec2 describe-instances \
+                        --filters "Name=tag:Environment,Values=Blue-Green" "Name=instance-state-name,Values=running" \
+                        --query 'Reservations[*].Instances[*].PublicIpAddress' \
+                        --output text
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    if (!instances) {
+                        error "No running instances found! Check AWS console and tagging."
+                    }
+
+                    def instanceList = instances.split("\n")
+
+                    instanceList.each { instance ->
+                        echo "Deploying to instance: ${instance}"
+                        sshagent([SSH_KEY_ID]) {
+                            sh """
+                            echo "Copying app.py to ${instance}..."
+                            scp -o StrictHostKeyChecking=no ${TF_WORKING_DIR}/modules/ec2/scripts/app.py ec2-user@${instance}:/home/ec2-user/app.py
+
+                            echo "Starting Python app on ${instance}..."
+                            ssh ec2-user@${instance} 'nohup python3 /home/ec2-user/app.py > /home/ec2-user/app.log 2>&1 &'
+                            """
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
