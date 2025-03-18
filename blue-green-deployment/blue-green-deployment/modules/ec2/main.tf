@@ -10,7 +10,6 @@ resource "aws_instance" "blue" {
       Environment = "Blue-Green"
     }
 
-
   provisioner "file" {
     source      = "${path.module}/scripts/install_dependencies.sh"
     destination = "/home/ec2-user/install_dependencies.sh"
@@ -82,4 +81,3 @@ resource "aws_instance" "green" {
     host        = self.public_ip
   }
 }
-
