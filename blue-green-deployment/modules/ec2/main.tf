@@ -6,29 +6,30 @@ resource "aws_instance" "blue" {
   security_groups = [var.ec2_security_group_id]
 
   tags = {
-      Name        = "Blue-Instance"
-      Environment = "Blue-Green"
-    }
-
+    Name        = "Blue-Instance"
+    Environment = "Blue-Green"
+  }
 
   provisioner "file" {
     source      = "${path.module}/scripts/install_dependencies.sh"
-    destination = "/home/ec2-user/install_dependencies.sh"
+    destination = "/tmp/install_dependencies.sh"
   }
 
   provisioner "file" {
     source      = "${path.module}/scripts/app.py"
-    destination = "/home/ec2-user/app.py"
+    destination = "/tmp/app.py"
   }
 
   provisioner "file" {
     source      = "${path.root}/Jenkinsfile"
-    destination = "/home/ec2-user/Jenkinsfile"
+    destination = "/tmp/Jenkinsfile"
   }
 
   provisioner "remote-exec" {
     inline = [
-      "chmod +x /home/ec2-user/install_dependencies.sh",
+      "sudo chmod +x /tmp/install_dependencies.sh",
+      "sudo mv /tmp/install_dependencies.sh /home/ec2-user/install_dependencies.sh",
+      "sudo chown ec2-user:ec2-user /home/ec2-user/install_dependencies.sh",
       "sudo /home/ec2-user/install_dependencies.sh"
     ]
   }
@@ -49,27 +50,30 @@ resource "aws_instance" "green" {
   security_groups = [var.ec2_security_group_id]
 
   tags = {
-    Name = "Green-Instance"
+    Name        = "Green-Instance"
     Environment = "Blue-Green"
   }
+
   provisioner "file" {
     source      = "${path.module}/scripts/install_dependencies.sh"
-    destination = "/home/ec2-user/install_dependencies.sh"
+    destination = "/tmp/install_dependencies.sh"
   }
 
   provisioner "file" {
     source      = "${path.module}/scripts/app.py"
-    destination = "/home/ec2-user/app.py"
+    destination = "/tmp/app.py"
   }
 
   provisioner "file" {
     source      = "${path.root}/Jenkinsfile"
-    destination = "/home/ec2-user/Jenkinsfile"
+    destination = "/tmp/Jenkinsfile"
   }
 
   provisioner "remote-exec" {
     inline = [
-      "chmod +x /home/ec2-user/install_dependencies.sh",
+      "sudo chmod +x /tmp/install_dependencies.sh",
+      "sudo mv /tmp/install_dependencies.sh /home/ec2-user/install_dependencies.sh",
+      "sudo chown ec2-user:ec2-user /home/ec2-user/install_dependencies.sh",
       "sudo /home/ec2-user/install_dependencies.sh"
     ]
   }
