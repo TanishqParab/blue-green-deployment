@@ -33,6 +33,7 @@ module "ec2" {
   private_key_base64    = var.private_key_base64
   public_key_path = var.public_key_path
   instance_type         = var.instance_type
+  script_path = var.script_path
 }
 
 module "asg" {
