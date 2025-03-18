@@ -11,7 +11,7 @@ resource "aws_instance" "blue" {
     }
 
   provisioner "file" {
-    source      = "${path.module}/scripts/install_dependencies.sh"
+    source      = "${var.script_path}/install_dependencies.sh"
     destination = "/home/ec2-user/install_dependencies.sh"
   }
 
@@ -53,7 +53,7 @@ resource "aws_instance" "green" {
   }
 
   provisioner "file" {
-    source      = "${path.module}/scripts/install_dependencies.sh"
+    source      = "${var.script_path}/install_dependencies.sh"
     destination = "/home/ec2-user/install_dependencies.sh"
   }
 
