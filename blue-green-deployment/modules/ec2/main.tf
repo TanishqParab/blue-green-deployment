@@ -52,7 +52,6 @@ resource "aws_instance" "green" {
     Name = "Green-Instance"
     Environment = "Blue-Green"
   }
-
   provisioner "file" {
     source      = "${path.module}/scripts/install_dependencies.sh"
     destination = "/home/ec2-user/install_dependencies.sh"
@@ -83,3 +82,6 @@ resource "aws_instance" "green" {
   }
 }
 
+output "module_path" {
+  value = path.module
+}
