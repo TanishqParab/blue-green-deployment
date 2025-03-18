@@ -36,3 +36,7 @@ variable "availability_zones" {
 variable "instance_type" {
   default = "t3.micro"
 }
+variable "script_path" {
+  description = "Path to the script directory"
+  type        = string
+}
