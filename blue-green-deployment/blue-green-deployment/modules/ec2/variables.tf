@@ -37,3 +37,8 @@ variable "public_key_path" {
   description = "Path to the public SSH key"
   type        = string
 }
+
+variable "script_path" {
+  description = "Path to the script directory"
+  type        = string
+}
