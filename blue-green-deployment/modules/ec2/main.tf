@@ -6,9 +6,9 @@ resource "aws_instance" "blue" {
   security_groups = [var.ec2_security_group_id]
 
   tags = {
-      Name        = "Blue-Instance"
-      Environment = "Blue-Green"
-    }
+    Name        = "Blue-Instance"
+    Environment = "Blue-Green"
+  }
 
   provisioner "file" {
     source      = "${path.module}/scripts/install_dependencies.sh"
@@ -27,8 +27,10 @@ resource "aws_instance" "blue" {
 
   provisioner "remote-exec" {
     inline = [
-      "chmod +x /home/ec2-user/install_dependencies.sh",
-      "sudo /home/ec2-user/install_dependencies.sh"
+      "sudo yum install -y dos2unix",  # Ensure dos2unix is installed
+      "dos2unix /home/ec2-user/install_dependencies.sh",  # Convert to UNIX format
+      "chmod +x /home/ec2-user/install_dependencies.sh",  # Ensure script is executable
+      "sudo /bin/bash /home/ec2-user/install_dependencies.sh"  # Run explicitly with bash
     ]
   }
 
@@ -69,8 +71,10 @@ resource "aws_instance" "green" {
 
   provisioner "remote-exec" {
     inline = [
-      "chmod +x /home/ec2-user/install_dependencies.sh",
-      "sudo /home/ec2-user/install_dependencies.sh"
+      "sudo yum install -y dos2unix",  # Ensure dos2unix is installed
+      "dos2unix /home/ec2-user/install_dependencies.sh",  # Convert to UNIX format
+      "chmod +x /home/ec2-user/install_dependencies.sh",  # Ensure script is executable
+      "sudo /bin/bash /home/ec2-user/install_dependencies.sh"  # Run explicitly with bash
     ]
   }
 
