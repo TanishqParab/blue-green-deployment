@@ -34,5 +34,21 @@ variable "availability_zones" {
 }
 
 variable "instance_type" {
-  default = "t3.micro"
+  type = string
+}
+
+variable "ami_id" {
+  type = string
+}
+
+variable "security_group_id" {
+  type = string 
+}
+variable "subnet_ids" {
+  type = string
+  
+}
+
+variable "vpc_id" {
+  type = string
 }
