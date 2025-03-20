@@ -18,3 +18,13 @@ variable "listener_port" {
   type        = number
   default     = 5000
 }
+
+variable "blue_instance_id" {
+  description = "ID of the Blue EC2 instance"
+  type        = string
+}
+
+variable "green_instance_id" {
+  description = "ID of the Green EC2 instance"
+  type        = string
+}
