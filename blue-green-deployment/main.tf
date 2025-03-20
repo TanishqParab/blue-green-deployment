@@ -21,13 +21,15 @@ module "alb" {
   vpc_id            = module.vpc.vpc_id
   subnet_ids        = module.vpc.public_subnet_ids # 🔥 Fix: Use correct attribute
   security_group_id = module.security_group.security_group_id
+  blue_instance_id = module.ec2.blue_instance_id
+  green_instance_id = module.ec2.green_instance_id
 }
 
 
 
 module "ec2" {
   source                = "./modules/ec2"
-  subnet_id             = module.vpc.public_subnet_ids[0] # Select the first subnet
+  subnet_id             = module.vpc.public_subnet_ids # Select the first subnet
   ec2_security_group_id = module.security_group.security_group_id
   key_name              = var.key_name
   private_key_base64    = var.private_key_base64
@@ -38,9 +40,12 @@ module "ec2" {
 module "asg" {
   source               = "./modules/asg"
   alb_target_group_arn = module.alb.target_group_arn_blue
-  subnet_ids           = module.vpc.public_subnet_ids # Ensure this output exists
+  subnet_ids           = module.vpc.public_subnet_ids # ✅ Make sure this exists!
   security_group_id    = module.security_group.security_group_id
   key_name             = var.key_name
+  private_key_base64 = var.private_key_base64
+  instance_type = var.instance_type
+  ami_id = var.ami_id
 }
 
 
