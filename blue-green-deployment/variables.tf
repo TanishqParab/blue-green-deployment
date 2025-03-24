@@ -39,4 +39,5 @@ variable "instance_type" {
 
 variable "listener_port" {
   type = number
+  default = 80
 }
