@@ -9,6 +9,24 @@ resource "aws_launch_template" "app" {
     security_groups = [var.security_group_id]
   }
 
+    # Assign tags directly in the launch template
+  tag_specifications {
+    resource_type = "instance"
+
+    tags = {
+      Name = "Blue-Instance"
+    }
+  }
+
+  tag_specifications {
+    resource_type = "instance"
+
+    tags = {
+      Name = "Green-Instance"
+    }
+  }
+
+
   user_data = base64encode(<<EOF
 #!/bin/bash
 # Update packages
@@ -51,6 +69,7 @@ EOF
 }
 
 
+
 resource "aws_autoscaling_group" "blue_green_asg" {
   name                      = "blue-green-asg"
   min_size                  = 2
@@ -62,13 +81,17 @@ resource "aws_autoscaling_group" "blue_green_asg" {
   health_check_grace_period = 300
   force_delete              = true
 
-  dynamic "tag" {
-    for_each = [0, 1]
-    content {
-      key                 = "Name"
-      value               = tag.value == 0 ? "Blue-Instance" : "Green-Instance"
-      propagate_at_launch = true
-    }
+  # Explicitly defining the tags for Blue and Green instances
+  tag {
+    key                 = "Name"
+    value               = "Blue-Instance"
+    propagate_at_launch = true
+  }
+
+  tag {
+    key                 = "Name"
+    value               = "Green-Instance"
+    propagate_at_launch = true
   }
 
 
