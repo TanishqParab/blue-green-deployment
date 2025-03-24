@@ -102,7 +102,7 @@ resource "aws_autoscaling_group" "blue_green_asg" {
 
   target_group_arns = [ 
     var.blue_target_group_arn,
-    var.var.green_target_group_arn
+    var.green_target_group_arn
    ]
 
 
