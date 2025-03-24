@@ -19,13 +19,4 @@ variable "security_group_id" {
   type        = string
 }
 
-variable "blue_target_group_arn" {
-  description = "The ARN of the Blue Target Group"
-  type        = string
-}
-
-variable "green_target_group_arn" {
-  description = "The ARN of the Green Target Group"
-  type        = string
-}
 
