@@ -3,31 +3,12 @@ resource "aws_launch_template" "app" {
   image_id      = "ami-05b10e08d247fb927"
   instance_type = "t3.micro"
   key_name      = var.key_name
-
   network_interfaces {
     associate_public_ip_address = true
     security_groups = [var.security_group_id]
   }
 
-    # Assign tags directly in the launch template
-  tag_specifications {
-    resource_type = "instance"
-
-    tags = {
-      Name = "Blue-Instance"
-    }
-  }
-
-  tag_specifications {
-    resource_type = "instance"
-
-    tags = {
-      Name = "Green-Instance"
-    }
-  }
-
-
-  user_data = base64encode(<<EOF
+    user_data = base64encode(<<EOF
 #!/bin/bash
 # Update packages
 sudo yum update -y
@@ -71,42 +52,20 @@ EOF
 
 
 resource "aws_autoscaling_group" "blue_green_asg" {
-  name                      = "blue-green-asg"
-  min_size                  = 2
-  max_size                  = 2
-  desired_capacity          = 2
-  vpc_zone_identifier       = var.subnet_ids
-
-  health_check_type         = "EC2"
-  health_check_grace_period = 300
-  force_delete              = true
-
-  # Explicitly defining the tags for Blue and Green instances
-  tag {
-    key                 = "Name"
-    value               = "Blue-Instance"
-    propagate_at_launch = true
-  }
-
-  tag {
-    key                 = "Name"
-    value               = "Green-Instance"
-    propagate_at_launch = true
-  }
-
-
+  name = "blue_green_asg"
+  desired_capacity     = 1
+  max_size            = 1
+  min_size            = 1
+  vpc_zone_identifier = var.subnet_ids
+  #target_group_arns   = [var.alb_target_group_arn]
+  
   launch_template {
     id      = aws_launch_template.app.id
     version = "$Latest"
   }
 
-  target_group_arns = [ 
-    var.blue_target_group_arn,
-    var.green_target_group_arn
-   ]
-
-
-  lifecycle {
-    ignore_changes = [ target_group_arns ]
+    lifecycle {
+    ignore_changes = [target_group_arns]
   }
 }
+
