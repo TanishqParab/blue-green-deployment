@@ -42,8 +42,6 @@ module "asg" {
   security_group_id    = module.security_group.security_group_id
   key_name             = var.key_name
   #alb_target_group_arn = var.alb_target_group_arn
-  blue_target_group_arn = var.blue_target_group_arn
-  green_target_group_arn = var.green_target_group_arn
 }
 
 
