@@ -62,18 +62,28 @@ resource "aws_autoscaling_group" "blue_green_asg" {
   health_check_grace_period = 300
   force_delete              = true
 
-  tag {
-    key                 = "Name"
-    value               = "Blue-Green-Instance"
-    propagate_at_launch = true
+  dynamic "tag" {
+    for_each = [0, 1]
+    content {
+      key                 = "Name"
+      value               = tag.value == 0 ? "Blue-Instance" : "Green-Instance"
+      propagate_at_launch = true
+    }
   }
+
 
   launch_template {
     id      = aws_launch_template.app.id
     version = "$Latest"
   }
 
+  target_group_arns = [ 
+    var.blue_target_group_arn,
+    var.var.green_target_group_arn
+   ]
+
+
   lifecycle {
-    ignore_changes = [target_group_arns]
+    ignore_changes = [ target_group_arns ]
   }
 }
