@@ -38,10 +38,12 @@ module "ec2" {
 
 module "asg" {
   source               = "./modules/asg"
-  #alb_target_group_arn = var.alb_target_group_arn
   subnet_ids           = module.vpc.public_subnet_ids # Ensure this output exists
   security_group_id    = module.security_group.security_group_id
   key_name             = var.key_name
+  #alb_target_group_arn = var.alb_target_group_arn
+  blue_target_group_arn = var.blue_target_group_arn
+  green_target_group_arn = var.green_target_group_arn
 }
 
 
