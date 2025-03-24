@@ -36,3 +36,7 @@ variable "availability_zones" {
 variable "instance_type" {
   default = "t3.micro"
 }
+
+variable "listener_port" {
+  type = number
+}
