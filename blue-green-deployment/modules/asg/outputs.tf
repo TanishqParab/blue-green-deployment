@@ -7,12 +7,3 @@ output "asg_name" {
   value       = aws_autoscaling_group.blue_green_asg.name
 }
 
-output "blue_target_group_arn" {
-  description = "Target group ARN for Blue instances"
-  value       = var.blue_target_group_arn
-}
-
-output "green_target_group_arn" {
-  description = "Target group ARN for Green instances"
-  value       = var.green_target_group_arn
-}
