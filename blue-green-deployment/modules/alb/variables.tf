@@ -16,5 +16,4 @@ variable "security_group_id" {
 variable "listener_port" {
   description = "Listener port for the ALB"
   type        = number
-  default     = 5000
 }
