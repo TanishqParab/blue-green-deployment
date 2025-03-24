@@ -9,3 +9,8 @@ output "target_group_arn_blue" {
 output "target_group_arn_green" {
   value = aws_lb_target_group.green.arn
 }
+
+output "alb_arn" {
+  description = "ARN of the ALB"
+  value       = aws_lb.main.arn
+}
