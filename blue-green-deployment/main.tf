@@ -21,6 +21,7 @@ module "alb" {
   vpc_id            = module.vpc.vpc_id
   subnet_ids        = module.vpc.public_subnet_ids # 🔥 Fix: Use correct attribute
   security_group_id = module.security_group.security_group_id
+  listener_port = var.listener_port
 }
 
 
