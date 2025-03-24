@@ -41,3 +41,14 @@ variable "listener_port" {
   type = number
   default = 80
 }
+
+variable "blue_target_group_arn" {
+  description = "ARN of the Blue target group"
+  type        = string
+}
+
+variable "green_target_group_arn" {
+  description = "ARN of the Green target group"
+  type        = string
+}
+
