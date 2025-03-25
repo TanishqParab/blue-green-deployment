@@ -65,7 +65,7 @@ resource "aws_autoscaling_group" "blue_green_asg" {
   }
 
     # Use the variable for Target Groups
-  target_group_arns = var.alb_target_group_arns
+  #target_group_arns = var.alb_target_group_arns
 
 
   lifecycle {
