@@ -64,8 +64,12 @@ resource "aws_autoscaling_group" "blue_green_asg" {
     version = "$Latest"
   }
 
-    lifecycle {
-    ignore_changes = [target_group_arns]
+    # Use the variable for Target Groups
+  target_group_arns = var.alb_target_group_arns
+
+
+  lifecycle {
+    ignore_changes = [ target_group_arns ]
   }
 }
 
