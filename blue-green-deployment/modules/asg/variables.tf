@@ -18,5 +18,9 @@ variable "security_group_id" {
   description = "The ID of the security group"
   type        = string
 }
-
+variable "alb_target_group_arns" {
+  description = "List of ALB Target Group ARNs to attach the ASG instances"
+  type        = list(string)
+  default = [  ]
+}
 
