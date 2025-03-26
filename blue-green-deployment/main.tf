@@ -43,6 +43,9 @@ module "asg" {
   key_name             = var.key_name
   #alb_target_group_arn = var.alb_target_group_arn
   alb_target_group_arns = [ module.alb.blue_target_group_arn, module.alb.green_target_group_arn ]
+  desired_capacity =  var.desired_capacity
+  min_size = var.min_size
+  max_size = var.max_size
 }
 
 
