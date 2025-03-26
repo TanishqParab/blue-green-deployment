@@ -1,5 +1,5 @@
 output "asg_id" {
-  value = aws_autoscaling_group.blue_green_asg
+  value = aws_autoscaling_group.blue_green_asg.id
 }
 
 output "asg_name" {
