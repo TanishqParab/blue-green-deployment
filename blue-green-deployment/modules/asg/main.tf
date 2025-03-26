@@ -77,8 +77,6 @@ resource "aws_autoscaling_group" "blue_green_asg" {
   lifecycle {
     ignore_changes = [ target_group_arns, desired_capacity, min_size, max_size ]
   }
-}
-
   instance_refresh {
     strategy = "Rolling"
     preferences {
@@ -87,3 +85,4 @@ resource "aws_autoscaling_group" "blue_green_asg" {
     }
   }
 }
+
