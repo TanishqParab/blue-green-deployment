@@ -52,3 +52,18 @@ variable "green_target_group_arn" {
   type        = string
 }
 
+variable "min_size" {
+  type    = number
+  default = 1
+}
+
+variable "max_size" {
+  type    = number
+  default = 2
+}
+
+variable "desired_capacity" {
+  type    = number
+  default = 1
+}
+
