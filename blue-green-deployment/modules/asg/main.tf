@@ -53,9 +53,9 @@ EOF
 
 resource "aws_autoscaling_group" "blue_green_asg" {
   name = "blue_green_asg"
-  desired_capacity     = 1
-  max_size            = 1
-  min_size            = 1
+  desired_capacity     = var.desired_capacity
+  max_size            = var.max_size
+  min_size            = var.min_size
   vpc_zone_identifier = var.subnet_ids
   #target_group_arns   = [var.alb_target_group_arn]
   
@@ -64,12 +64,17 @@ resource "aws_autoscaling_group" "blue_green_asg" {
     version = "$Latest"
   }
 
-    # Use the variable for Target Groups
+  # Use the variable for Target Groups
   target_group_arns = var.alb_target_group_arns
 
+  # Enable ELB health checks for better instance recovery
+  health_check_type         = "ELB"
+  health_check_grace_period = 300
+
+  # Ensure instances are replaced properly when terminated
+  termination_policies = ["OldestInstance"]
 
   lifecycle {
-    ignore_changes = [ alb_target_group_arns ]
+    ignore_changes = [ alb_target_group_arns, desired_capacity, min_size, max_size ]
   }
 }
-
