@@ -23,4 +23,18 @@ variable "alb_target_group_arns" {
   type        = list(string)
   default = [  ]
 }
+variable "min_size" {
+  type    = number
+  default = 1
+}
+
+variable "max_size" {
+  type    = number
+  default = 2
+}
+
+variable "desired_capacity" {
+  type    = number
+  default = 1
+}
 
