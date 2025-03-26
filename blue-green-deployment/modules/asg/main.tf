@@ -69,7 +69,7 @@ resource "aws_autoscaling_group" "blue_green_asg" {
 
 
   lifecycle {
-    ignore_changes = [ target_group_arns ]
+    ignore_changes = [ alb_target_group_arns ]
   }
 }
 
