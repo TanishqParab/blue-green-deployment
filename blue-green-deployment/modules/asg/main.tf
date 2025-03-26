@@ -75,6 +75,6 @@ resource "aws_autoscaling_group" "blue_green_asg" {
   termination_policies = ["OldestInstance"]
 
   lifecycle {
-    ignore_changes = [ alb_target_group_arns, desired_capacity, min_size, max_size ]
+    ignore_changes = [ target_group_arns, desired_capacity, min_size, max_size ]
   }
 }
