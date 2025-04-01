@@ -15,6 +15,7 @@ resource "aws_lb_target_group" "blue" {
 
     health_check {
     path                = "/health"  # Update this if your health check endpoint is different
+    port                = "5000"
     interval            = 30        # Check every 30 seconds
     timeout             = 5         # Timeout after 5 seconds
     healthy_threshold   = 3         # 3 consecutive successes for health
