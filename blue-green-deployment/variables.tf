@@ -59,7 +59,7 @@ variable "min_size" {
 
 variable "max_size" {
   type    = number
-  default = 2
+  default = 1
 }
 
 variable "desired_capacity" {
