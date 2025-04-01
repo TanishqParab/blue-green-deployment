@@ -59,7 +59,7 @@ variable "min_size" {
 
 variable "max_size" {
   type    = number
-  default = 1
+  default = 2
 }
 
 variable "desired_capacity" {
@@ -82,7 +82,7 @@ variable "health_check_interval" {
 variable "health_check_timeout" {
   description = "The timeout (in seconds) for each health check."
   type        = number
-  default     = 5
+  default     = 10
 }
 
 variable "healthy_threshold" {
