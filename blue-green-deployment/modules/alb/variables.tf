@@ -33,7 +33,7 @@ variable "health_check_interval" {
 variable "health_check_timeout" {
   description = "The timeout (in seconds) for each health check."
   type        = number
-  default     = 5
+  default     = 10
 }
 
 variable "healthy_threshold" {
