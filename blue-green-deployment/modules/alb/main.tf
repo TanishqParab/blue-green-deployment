@@ -20,7 +20,7 @@ resource "aws_lb_target_group" "blue" {
     timeout             = 5         # Timeout after 5 seconds
     healthy_threshold   = 3         # 3 consecutive successes for health
     unhealthy_threshold = 2         # 2 consecutive failures to be unhealthy
-    matcher             = { http_code = "200" }      # HTTP code to consider healthy (200)
+    matcher             = "200"     # HTTP code to consider healthy (200)
   }
 }
 
@@ -37,7 +37,7 @@ resource "aws_lb_target_group" "green" {
     timeout             = 5         # Timeout after 5 seconds
     healthy_threshold   = 3         # 3 consecutive successes for health
     unhealthy_threshold = 2         # 2 consecutive failures to be unhealthy
-    matcher             = { http_code = "200" }       # HTTP code to consider healthy (200)
+    matcher             = "200"       # HTTP code to consider healthy (200)
   }
 }
 
