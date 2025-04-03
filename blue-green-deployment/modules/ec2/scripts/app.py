@@ -4,7 +4,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Hello, Blue-Green Deployment on Amazon Linux 2! Tanishq here New Version V2 v3 V4!V5! V6 V7 v8 v9 v10 v11 V12 V13 V14 v15 v16 v17 v18 v19 v20"
+    return "Hello, Blue-Green Deployment on Amazon Linux 2! Tanishq here New Version V2 v3 V4!V5! V6 V7 v8 v9 v10 v11 V12 V13 V14 v15 v16 v17 v18 v19 v20 v21"
 
 @app.route('/health')
 def health():
