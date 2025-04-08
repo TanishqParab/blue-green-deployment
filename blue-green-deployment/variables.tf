@@ -45,11 +45,13 @@ variable "listener_port" {
 variable "blue_target_group_arn" {
   description = "ARN of the Blue target group"
   type        = string
+  default     = ""
 }
 
 variable "green_target_group_arn" {
   description = "ARN of the Green target group"
   type        = string
+  default     = ""
 }
 
 variable "min_size" {
