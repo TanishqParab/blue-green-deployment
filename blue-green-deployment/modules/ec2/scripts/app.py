@@ -4,7 +4,21 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Hello, Blue-Green Deployment on Amazon Linux 2! Tanishq here v5"
+    return '''
+        <html>
+            <head>
+                <title>Blue-Green Deployment</title>
+                <style>
+                    body { font-family: Arial, sans-serif; text-align: center; margin-top: 100px; }
+                    .version { font-size: 48px; font-weight: bold; color: #007bff; }
+                </style>
+            </head>
+            <body>
+                <h1>Hello, Blue-Green Deployment on EC2</h1>
+                <div class="version">v6</div>
+            </body>
+        </html>
+    '''
 
 @app.route('/health')
 def health():
