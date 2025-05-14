@@ -12,6 +12,9 @@ def call(Map config = [:]) {
     // Merge with user-provided config
     config = ec2Config + config
     
+    // Load the base pipeline script
+    def basePipeline = load("${WORKSPACE}/Pipelines-T/jenkins-shared-library/resources/templates/base-pipeline.groovy")
+    
     // Call the base pipeline with EC2 config
-    return baseTemplate(config)
+    return basePipeline.call(config)
 }
