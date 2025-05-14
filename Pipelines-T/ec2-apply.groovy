@@ -1,9 +1,9 @@
-// ec2-apply.Jenkinsfile
+// ec2-apply.groovy
 
 @Library('jenkins-shared-library') _
 
-// Import the EC2 pipeline template
-def ec2Pipeline = library('jenkins-shared-library').resources.templates.'ec2-apply-pipeline'
+// Load the EC2 pipeline script
+def ec2Pipeline = load("${WORKSPACE}/Pipelines-T/jenkins-shared-library/resources/templates/ec2-apply-pipeline.groovy")
 
 // Call the pipeline with custom configuration
 ec2Pipeline([
