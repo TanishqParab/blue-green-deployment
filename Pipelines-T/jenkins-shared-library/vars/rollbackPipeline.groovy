@@ -105,6 +105,22 @@ def call(Map config) {
                             // ECS implementation - Fetch ECS and ALB Resources
                             echo "🔎 Finding previous ECS image for rollback..."
 
+                            try {
+                                // Get ECS Cluster
+                                env.ECS_CLUSTER = sh(
+                                    script: "aws ecs list-clusters --query 'clusterArns[0]' --output text | awk -F'/' '{print \$2}'",
+                                    returnStdout: true
+                                ).trim()
+                        
+                                if (!env.ECS_CLUSTER || env.ECS_CLUSTER == "None") {
+                                    env.ECS_CLUSTER = "blue-green-cluster"
+                                }
+                                echo "✅ ECS Cluster: ${env.ECS_CLUSTER}"
+                            } catch (Exception e) {
+                                error "❌ Failed to get ECS cluster: ${e.message}"
+                            }
+
+
                             def currentTaskDef = sh(
                                 script: "aws ecs describe-services --cluster ${env.ECS_CLUSTER} --services ${env.CURRENT_SERVICE} --query 'services[0].taskDefinition' --output text",
                                 returnStdout: true
