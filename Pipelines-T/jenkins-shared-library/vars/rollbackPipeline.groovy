@@ -54,127 +54,127 @@ def call(Map config) {
                         if (config.implementation == 'ec2') {
                             // EC2 implementation - Fetch ALB and Target Group ARNs
                             echo "🔄 Fetching ALB and target group resources..."
-                            
+            
                             // Get ALB ARN
                             def albArn = sh(script: """
                                 aws elbv2 describe-load-balancers --names blue-green-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text
                             """, returnStdout: true).trim()
-                            
+            
                             if (!albArn) {
                                 error "❌ Failed to retrieve ALB ARN! Check if the load balancer 'blue-green-alb' exists in AWS."
                             }
-                            
+            
                             echo "✅ ALB ARN: ${albArn}"
                             env.ALB_ARN = albArn
-                            
+            
                             // Get listener ARN
                             def listenerArn = sh(script: """
                                 aws elbv2 describe-listeners --load-balancer-arn ${albArn} --query 'Listeners[?Port==`80`].ListenerArn' --output text
                             """, returnStdout: true).trim()
-                            
+            
                             if (!listenerArn) {
                                 error "❌ Listener ARN not found! Check if the ALB has a listener attached."
                             }
-                            
+            
                             echo "✅ Listener ARN: ${listenerArn}"
                             env.LISTENER_ARN = listenerArn
-                            
+            
                             // Get target group ARNs
                             env.BLUE_TG_ARN = sh(script: """
                                 aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text
                             """, returnStdout: true).trim()
-                            
+            
                             env.GREEN_TG_ARN = sh(script: """
                                 aws elbv2 describe-target-groups --names green-tg --query 'TargetGroups[0].TargetGroupArn' --output text
                             """, returnStdout: true).trim()
-                            
+            
                             // Validate the target group ARNs
                             if (!env.GREEN_TG_ARN || env.GREEN_TG_ARN == 'null') {
                                 error "❌ GREEN_TG_ARN not retrieved properly. Aborting rollback."
                             } else {
                                 echo "✅ GREEN_TG_ARN retrieved: ${env.GREEN_TG_ARN}"
                             }
-                            
+            
                             if (!env.BLUE_TG_ARN || env.BLUE_TG_ARN == 'null') {
                                 error "❌ BLUE_TG_ARN not retrieved properly. Aborting rollback."
                             } else {
                                 echo "✅ BLUE_TG_ARN retrieved: ${env.BLUE_TG_ARN}"
                             }
-                            
+            
                         } else if (config.implementation == 'ecs') {
                             // ECS implementation - Fetch ECS and ALB Resources
                             echo "🔎 Finding previous ECS image for rollback..."
-
+            
                             try {
                                 // Get ECS Cluster
                                 env.ECS_CLUSTER = sh(
                                     script: "aws ecs list-clusters --query 'clusterArns[0]' --output text | awk -F'/' '{print \$2}'",
                                     returnStdout: true
                                 ).trim()
-                            
+            
                                 if (!env.ECS_CLUSTER || env.ECS_CLUSTER == "None") {
                                     env.ECS_CLUSTER = "blue-green-cluster"  // fallback cluster name
                                 }
                                 echo "✅ ECS Cluster: ${env.ECS_CLUSTER}"
-                            
+            
                                 // Ensure CURRENT_SERVICE is set
                                 if (!env.CURRENT_SERVICE || env.CURRENT_SERVICE == "null" || env.CURRENT_SERVICE.trim() == "") {
                                     error "❌ CURRENT_SERVICE environment variable is not set or invalid. Please set it to your ECS service name."
                                 }
                                 echo "✅ ECS Service: ${env.CURRENT_SERVICE}"
-                            
+            
                                 // Fetch current Task Definition ARN from ECS Service
                                 def currentTaskDef = sh(
                                     script: "aws ecs describe-services --cluster ${env.ECS_CLUSTER} --services ${env.CURRENT_SERVICE} --query 'services[0].taskDefinition' --output text",
                                     returnStdout: true
                                 ).trim()
-                            
+            
                                 if (!currentTaskDef || currentTaskDef == "None") {
                                     error "❌ ECS service '${env.CURRENT_SERVICE}' not found or has no active task definition."
                                 }
                                 echo "📦 Current Task Definition ARN: ${currentTaskDef}"
-                            
+            
                                 // Describe the Task Definition JSON
                                 def taskDefJsonText = sh(
                                     script: "aws ecs describe-task-definition --task-definition ${currentTaskDef} --query 'taskDefinition' --output json",
                                     returnStdout: true
                                 ).trim()
-                            
+            
                                 def taskDefJson = readJSON text: taskDefJsonText
                                 def currentImage = taskDefJson.containerDefinitions[0].image
                                 echo "🖼️ Current container image: ${currentImage}"
-                            
+            
                                 // Get ECR repo name from environment
                                 def ecrRepoName = env.ECR_REPO_NAME
                                 if (!ecrRepoName || ecrRepoName.trim() == "") {
                                     error "❌ ECR_REPO_NAME environment variable is not set."
                                 }
                                 echo "✅ ECR Repository: ${ecrRepoName}"
-                            
+            
                                 // List images sorted by push date (ascending)
                                 def imageListCmd = """
                                     aws ecr describe-images --repository-name ${ecrRepoName} \
                                     --query 'sort_by(imageDetails,&imagePushedAt)[].[imageTags[0],imagePushedAt,imageDigest]' --output json
                                 """
                                 def imagesJson = readJSON text: sh(script: imageListCmd, returnStdout: true).trim()
-                            
+            
                                 if (imagesJson.size() < 2) {
                                     error "❌ Not enough images in ECR for rollback (need at least 2)."
                                 }
-                            
+            
                                 // Get ECR repo URI
                                 def ecrRepoUri = sh(
                                     script: "aws ecr describe-repositories --repository-names ${ecrRepoName} --query 'repositories[0].repositoryUri' --output text",
                                     returnStdout: true
                                 ).trim()
                                 echo "✅ ECR Repository URI: ${ecrRepoUri}"
-                            
+            
                                 // Extract current tag from image URI
                                 def currentTag = currentImage.contains(":") ? currentImage.split(":")[1] : "latest"
-                            
+            
                                 // Reverse list so latest images are first
                                 imagesJson = imagesJson.reverse()
-                            
+            
                                 // Find previous tag for rollback
                                 def previousTag = null
                                 for (int i = 0; i < imagesJson.size(); i++) {
@@ -187,19 +187,22 @@ def call(Map config) {
                                 if (previousTag == null) {
                                     previousTag = imagesJson[1][0]
                                 }
-                            
+            
                                 // Set environment variables for rollback
                                 env.ROLLBACK_IMAGE = "${ecrRepoUri}:${previousTag}"
                                 env.CONTAINER_NAME = taskDefJson.containerDefinitions[0].name
                                 env.CURRENT_TASK_DEF_JSON = taskDefJsonText
-                            
+            
                                 echo "✅ Rollback image found: ${env.ROLLBACK_IMAGE}"
                                 echo "✅ Container name: ${env.CONTAINER_NAME}"
+            
+                            } catch (Exception e) {
+                                error "❌ Error during ECS rollback preparation: ${e.message}"
+                            }
                         }
                     }
                 }
             }
-            
             stage('Prepare Rollback') {
                 steps {
                     script {
