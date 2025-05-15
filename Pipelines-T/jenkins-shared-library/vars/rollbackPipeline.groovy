@@ -350,7 +350,11 @@ def call(Map config) {
                                 }
                                 
                                 // Get container image with validation
-                                def currentImage = taskDefJson?.containerDefinitions?[0]?.image
+                                // Get container image with validation
+                                def currentImage = null
+                                if (taskDefJson && taskDefJson.containerDefinitions && !taskDefJson.containerDefinitions.isEmpty()) {
+                                    currentImage = taskDefJson.containerDefinitions[0].image
+                                }
                                 if (!currentImage) {
                                     error "❌ Could not determine current container image"
                                 }
