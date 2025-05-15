@@ -6,7 +6,7 @@ def call(Map config = [:]) {
         implementation: 'ecs',
         awsRegion: 'us-east-1',
         awsCredentialsId: 'aws-credentials',
-        tfWorkingDir: "/var/lib/jenkins/workspace/blue-green-deployment-job/blue-green-deployment",
+        tfWorkingDir: "/var/lib/jenkins/workspace/blue-green-deployment-job-ecs-switch-test/blue-green-deployment",
         repoUrl: 'https://github.com/TanishqParab/blue-green-deployment-ecs-test',
         repoBranch: 'main',
         emailRecipient: 'tanishqparab2001@gmail.com',
