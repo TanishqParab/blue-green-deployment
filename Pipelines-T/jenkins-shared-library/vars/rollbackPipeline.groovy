@@ -103,104 +103,60 @@ def call(Map config) {
                             
                         } else if (config.implementation == 'ecs') {
                             // ECS implementation - Fetch ECS and ALB Resources
-                            echo "Fetching current deployment state..."
-                            
-                            try {
-                                // Get ECS Cluster
-                                env.ECS_CLUSTER = sh(
-                                    script: "aws ecs list-clusters --query 'clusterArns[0]' --output text | awk -F'/' '{print \$2}'",
-                                    returnStdout: true
-                                ).trim()
-                                
-                                if (!env.ECS_CLUSTER || env.ECS_CLUSTER == "None") {
-                                    env.ECS_CLUSTER = "blue-green-cluster"
-                                }
-                                echo "✅ ECS Cluster: ${env.ECS_CLUSTER}"
+                            echo "🔎 Finding previous ECS image for rollback..."
 
-                                // Get ALB ARN
-                                def albArn = sh(
-                                    script: "aws elbv2 describe-load-balancers --names blue-green-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text",
-                                    returnStdout: true
-                                ).trim()
-                                if (!albArn || albArn == "None") {
-                                    error "❌ ALB ARN not found!"
-                                }
-                                env.ALB_ARN = albArn
-                                echo "✅ ALB ARN: ${env.ALB_ARN}"
+                            def currentTaskDef = sh(
+                                script: "aws ecs describe-services --cluster ${env.ECS_CLUSTER} --services ${env.CURRENT_SERVICE} --query 'services[0].taskDefinition' --output text",
+                                returnStdout: true
+                            ).trim()
+                            echo "📦 Current Task Definition ARN: ${currentTaskDef}"
 
-                                // Get Listener ARN
-                                def listenerArn = sh(
-                                    script: "aws elbv2 describe-listeners --load-balancer-arn ${env.ALB_ARN} --query 'Listeners[?Port==`80`].ListenerArn' --output text",
-                                    returnStdout: true
-                                ).trim()
-                                if (!listenerArn || listenerArn == "None") {
-                                    error "❌ Listener ARN not found!"
-                                }
-                                env.LISTENER_ARN = listenerArn
-                                echo "✅ Listener ARN: ${env.LISTENER_ARN}"
+                            def taskDefJsonText = sh(
+                                script: "aws ecs describe-task-definition --task-definition ${currentTaskDef} --query 'taskDefinition' --output json",
+                                returnStdout: true
+                            ).trim()
 
-                                // Get BLUE Target Group ARN
-                                def blueTG = sh(
-                                    script: "aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text",
-                                    returnStdout: true
-                                ).trim()
-                                if (!blueTG || blueTG == "None" || blueTG == "null") {
-                                    error "❌ BLUE_TG_ARN not retrieved!"
-                                }
-                                env.BLUE_TG_ARN = blueTG
-                                echo "✅ BLUE_TG_ARN: ${env.BLUE_TG_ARN}"
+                            def taskDefJson = readJSON text: taskDefJsonText
+                            def currentImage = taskDefJson.containerDefinitions[0].image
+                            echo "🖼️ Current container image: ${currentImage}"
 
-                                // Get GREEN Target Group ARN
-                                def greenTG = sh(
-                                    script: "aws elbv2 describe-target-groups --names green-tg --query 'TargetGroups[0].TargetGroupArn' --output text",
-                                    returnStdout: true
-                                ).trim()
-                                if (!greenTG || greenTG == "None" || greenTG == "null") {
-                                    error "❌ GREEN_TG_ARN not retrieved!"
-                                }
-                                env.GREEN_TG_ARN = greenTG
-                                echo "✅ GREEN_TG_ARN: ${env.GREEN_TG_ARN}"
+                            def ecrRepoName = env.ECR_REPO_NAME
+                            def imageListCmd = """
+                                aws ecr describe-images --repository-name ${ecrRepoName} \
+                                --query 'sort_by(imageDetails,&imagePushedAt)[].[imageTags[0],imagePushedAt,imageDigest]' --output json
+                            """
+                            def imagesJson = readJSON text: sh(script: imageListCmd, returnStdout: true).trim()
 
-                                // Determine currently active TG
-                                def currentTG = sh(
-                                    script: """
-                                        aws elbv2 describe-rules \
-                                            --listener-arn ${env.LISTENER_ARN} \
-                                            --query 'Rules[?Priority==`1`].Actions[0].TargetGroupArn' --output text
-                                    """,
-                                    returnStdout: true
-                                ).trim()
-
-                                if (currentTG == env.BLUE_TG_ARN) {
-                                    env.CURRENT_ENV = "BLUE"
-                                    env.ROLLBACK_ENV = "GREEN"
-                                    env.CURRENT_SERVICE = "blue-service"
-                                    env.ROLLBACK_SERVICE = "green-service"
-                                    env.ROLLBACK_TG_ARN = env.GREEN_TG_ARN  // ADD THIS LINE
-                                } else if (currentTG == env.GREEN_TG_ARN) {
-                                    env.CURRENT_ENV = "GREEN"
-                                    env.ROLLBACK_ENV = "BLUE"
-                                    env.CURRENT_SERVICE = "green-service"
-                                    env.ROLLBACK_SERVICE = "blue-service"
-                                    env.ROLLBACK_TG_ARN = env.BLUE_TG_ARN  // ADD THIS LINE
-                                } else {
-                                    error "❌ Current target group does not match BLUE or GREEN!"
-                                }
-
-                                echo "🔁 Current Traffic: ${env.CURRENT_ENV}"
-                                echo "🔁 Rollback Target: ${env.ROLLBACK_ENV}"
-                                echo "🔁 Rollback Target Group ARN: ${env.ROLLBACK_TG_ARN}"  // ADD THIS LINE
-
-                                // Get ALB DNS
-                                env.ALB_DNS = sh(
-                                    script: "aws elbv2 describe-load-balancers --load-balancer-arns ${env.ALB_ARN} --query 'LoadBalancers[0].DNSName' --output text",
-                                    returnStdout: true
-                                ).trim()
-                                echo "🌐 ALB DNS: ${env.ALB_DNS}"
-
-                            } catch (Exception e) {
-                                error "❌ Failed to fetch ECS/ALB resources: ${e.message}"
+                            if (imagesJson.size() < 2) {
+                                error "❌ Not enough images in ECR for rollback (need at least 2)"
                             }
+
+                            def ecrRepoUri = sh(
+                                script: "aws ecr describe-repositories --repository-names ${ecrRepoName} --query 'repositories[0].repositoryUri' --output text",
+                                returnStdout: true
+                            ).trim()
+
+                            def currentTag = currentImage.contains(":") ? currentImage.split(":")[1] : "latest"
+                            imagesJson = imagesJson.reverse()
+
+                            def previousTag = null
+                            for (int i = 0; i < imagesJson.size(); i++) {
+                                if (imagesJson[i][0] == currentTag && i + 1 < imagesJson.size()) {
+                                    previousTag = imagesJson[i + 1][0]
+                                    break
+                                }
+                            }
+
+                            if (previousTag == null) {
+                                previousTag = imagesJson[1][0]
+                            }
+
+                            env.ROLLBACK_IMAGE = "${ecrRepoUri}:${previousTag}"
+                            env.CONTAINER_NAME = taskDefJson.containerDefinitions[0].name
+                            env.CURRENT_TASK_DEF_JSON = taskDefJsonText
+
+                            echo "✅ Rollback image found: ${env.ROLLBACK_IMAGE}"
+                            echo "✅ Container name: ${env.CONTAINER_NAME}"
                         }
                     }
                 }
@@ -311,235 +267,107 @@ def call(Map config) {
                         } else if (config.implementation == 'ecs') {
                             // ECS implementation - Find previous version
                             echo "Finding previous version for rollback..."
-                            
-                            try {
-                                // Validate critical environment variables first
-                                def requiredVars = ['ECS_CLUSTER', 'CURRENT_SERVICE', 'ROLLBACK_SERVICE', 
-                                                'ROLLBACK_TG_ARN', 'LISTENER_ARN', 'ECR_REPO_NAME']
-                                requiredVars.each { var ->
-                                    if (!env."${var}") {
-                                        error "❌ Missing required environment variable: ${var}"
-                                    }
-                                }
-                                echo "✅ Verified all required environment variables"
+                            echo "🚀 Preparing ECS rollback deployment..."
 
-                                // 1. Get current deployment details
-                                echo "🔍 Retrieving current task definition..."
-                                def currentTaskDef = sh(
-                                    script: """
-                                        aws ecs describe-services \
-                                            --cluster ${env.ECS_CLUSTER} \
-                                            --services ${env.CURRENT_SERVICE} \
-                                            --query 'services[0].taskDefinition' \
-                                            --output text
-                                    """,
+                            def rollbackTaskDefJson
+                            def rollbackTaskDefArn = sh(
+                                script: "aws ecs describe-services --cluster ${env.ECS_CLUSTER} --services ${env.ROLLBACK_SERVICE} --query 'services[0].taskDefinition' --output text || echo MISSING",
+                                returnStdout: true
+                            ).trim()
+
+                            if (rollbackTaskDefArn != "MISSING" && rollbackTaskDefArn != "None") {
+                                def taskDefText = sh(
+                                    script: "aws ecs describe-task-definition --task-definition ${rollbackTaskDefArn} --query 'taskDefinition' --output json",
                                     returnStdout: true
                                 ).trim()
-                                
-                                if (!currentTaskDef) {
-                                    error "❌ Failed to get current task definition for service ${env.CURRENT_SERVICE}"
-                                }
-                                echo "📋 Current task definition: ${currentTaskDef}"
-
-                                // 2. Get task definition details
-                                def taskDefJson
-                                try {
-                                    def taskDef = sh(
-                                        script: """
-                                            aws ecs describe-task-definition \
-                                                --task-definition ${currentTaskDef} \
-                                                --query 'taskDefinition' \
-                                                --output json
-                                        """,
-                                        returnStdout: true
-                                    ).trim()
-                                    taskDefJson = readJSON text: taskDef
-                                } catch (Exception e) {
-                                    error "❌ Failed to parse task definition: ${e.message}"
-                                }
-
-                                // 3. Find previous image version
-                                echo "🕵️ Finding previous image version..."
-                                def currentImage = taskDefJson.containerDefinitions[0].image
-                                echo "📷 Current image: ${currentImage}"
-
-                                // Get ECR repository URI
-                                def ecrRepoUri = sh(
-                                    script: """
-                                        aws ecr describe-repositories \
-                                            --repository-names ${env.ECR_REPO_NAME} \
-                                            --query 'repositories[0].repositoryUri' \
-                                            --output text
-                                    """,
-                                    returnStdout: true
-                                ).trim()
-
-                                // Get all images sorted by push date (newest first)
-                                def imagesOutput = sh(
-                                    script: """
-                                        aws ecr describe-images \
-                                            --repository-name ${env.ECR_REPO_NAME} \
-                                            --query 'sort_by(imageDetails,&imagePushedAt)[*]' \
-                                            --output json
-                                    """,
-                                    returnStdout: true
-                                ).trim()
-                                
-                                def images = readJSON text: imagesOutput
-                                if (images.size() < 2) {
-                                    error "❌ Need at least 2 images in repository for rollback"
-                                }
-
-                                // Find current and previous image
-                                def currentTag = currentImage.contains(":") ? currentImage.split(":")[1] : "latest"
-                                def previousImage = images.reverse().findResult { img ->
-                                    img.imageTags?.any { it != currentTag } ? img : null
-                                }
-
-                                if (!previousImage) {
-                                    error "❌ Could not find a previous image to rollback to"
-                                }
-
-                                env.ROLLBACK_IMAGE = "${ecrRepoUri}:${previousImage.imageTags[0]}"
-                                echo "🔄 Rollback image: ${env.ROLLBACK_IMAGE}"
-                                env.CONTAINER_NAME = taskDefJson.containerDefinitions[0].name
-                                echo "📦 Container name: ${env.CONTAINER_NAME}"
-
-                                // 4. Prepare new task definition
-                                echo "🛠 Preparing new task definition..."
-                                def rollbackServiceTaskDef = sh(
-                                    script: """
-                                        aws ecs describe-services \
-                                            --cluster ${env.ECS_CLUSTER} \
-                                            --services ${env.ROLLBACK_SERVICE} \
-                                            --query 'services[0].taskDefinition' \
-                                            --output text || echo "MISSING"
-                                    """,
-                                    returnStdout: true
-                                ).trim()
-
-                                def taskDefToUse = (rollbackServiceTaskDef != "MISSING" && rollbackServiceTaskDef != "None") ?
-                                    readJSON(text: sh(script: """
-                                        aws ecs describe-task-definition \
-                                            --task-definition ${rollbackServiceTaskDef} \
-                                            --query 'taskDefinition' \
-                                            --output json
-                                    """, returnStdout: true).trim()) :
-                                    readJSON(text: env.CURRENT_TASK_DEF_JSON)
-
-                                // Clean task definition
-                                ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes', 
-                                'compatibilities', 'registeredAt', 'registeredBy', 'deregisteredAt'].each { 
-                                    taskDefToUse.remove(it) 
-                                }
-                                
-                                // Update image
-                                taskDefToUse.containerDefinitions[0].image = env.ROLLBACK_IMAGE
-
-                                // Register new task definition
-                                writeJSON file: 'rollback-task-def.json', json: taskDefToUse
-                                env.NEW_TASK_DEF_ARN = sh(
-                                    script: """
-                                        aws ecs register-task-definition \
-                                            --cli-input-json file://rollback-task-def.json \
-                                            --query 'taskDefinition.taskDefinitionArn' \
-                                            --output text
-                                    """,
-                                    returnStdout: true
-                                ).trim()
-                                echo "✅ Registered new task definition: ${env.NEW_TASK_DEF_ARN}"
-
-                                // 5. Ensure target group is properly associated
-                                echo "🔗 Verifying target group association..."
-                                def targetGroupInfo = sh(
-                                    script: """
-                                        aws elbv2 describe-target-groups \
-                                            --target-group-arns ${env.ROLLBACK_TG_ARN} \
-                                            --query 'TargetGroups[0].LoadBalancerArns' \
-                                            --output text
-                                    """,
-                                    returnStdout: true
-                                ).trim()
-
-                                if (!targetGroupInfo) {
-                                    echo "⚠️ Target group not associated, creating rule..."
-                                    
-                                    // Find available priority
-                                    def usedPriorities = sh(
-                                        script: """
-                                            aws elbv2 describe-rules \
-                                                --listener-arn ${env.LISTENER_ARN} \
-                                                --query 'Rules[?Priority!=`default`].Priority' \
-                                                --output json
-                                        """,
-                                        returnStdout: true
-                                    ).trim()
-                                    
-                                    def priority = 100
-                                    while (readJSON(text: usedPriorities).contains(priority.toString())) {
-                                        priority++
-                                    }
-
-                                    sh """
-                                        aws elbv2 create-rule \
-                                            --listener-arn ${env.LISTENER_ARN} \
-                                            --priority ${priority} \
-                                            --conditions '[{"Field":"path-pattern","Values":["/rollback-verify/*"]}]' \
-                                            --actions '[{"Type":"forward","TargetGroupArn":"${env.ROLLBACK_TG_ARN}"}]'
-                                    """
-                                    sleep 10
-                                }
-
-                                // 6. Update or create service
-                                echo "🔄 Updating ${env.ROLLBACK_SERVICE} service..."
-                                def serviceExists = sh(
-                                    script: """
-                                        aws ecs describe-services \
-                                            --cluster ${env.ECS_CLUSTER} \
-                                            --services ${env.ROLLBACK_SERVICE} \
-                                            --query 'services[0].status' \
-                                            --output text || echo "MISSING"
-                                    """,
-                                    returnStdout: true
-                                ).trim()
-
-                                if (serviceExists == "MISSING" || serviceExists == "INACTIVE") {
-                                    echo "🆕 Creating new service..."
-                                    sh """
-                                        aws ecs create-service \
-                                            --cluster ${env.ECS_CLUSTER} \
-                                            --service-name ${env.ROLLBACK_SERVICE} \
-                                            --task-definition ${env.NEW_TASK_DEF_ARN} \
-                                            --desired-count 1 \
-                                            --load-balancers \
-                                                targetGroupArn=${env.ROLLBACK_TG_ARN},
-                                                containerName=${env.CONTAINER_NAME},
-                                                containerPort=${env.CONTAINER_PORT}
-                                    """
-                                } else {
-                                    echo "🔄 Updating existing service..."
-                                    sh """
-                                        aws ecs update-service \
-                                            --cluster ${env.ECS_CLUSTER} \
-                                            --service ${env.ROLLBACK_SERVICE} \
-                                            --task-definition ${env.NEW_TASK_DEF_ARN} \
-                                            --desired-count 1 \
-                                            --force-new-deployment
-                                    """
-                                }
-
-                                // 7. Wait for stabilization
-                                echo "⏳ Waiting for service to stabilize..."
-                                sh """
-                                    aws ecs wait services-stable \
-                                        --cluster ${env.ECS_CLUSTER} \
-                                        --services ${env.ROLLBACK_SERVICE}
-                                """
-                                echo "✅ ${env.ROLLBACK_ENV} service is ready for rollback!"
-
-                            } catch (Exception e) {
-                                error "❌ Rollback preparation failed: ${e.message}"
+                                rollbackTaskDefJson = readJSON text: taskDefText
+                            } else {
+                                rollbackTaskDefJson = readJSON text: env.CURRENT_TASK_DEF_JSON
                             }
+
+                            ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes', 'compatibilities', 
+                            'registeredAt', 'registeredBy', 'deregisteredAt'].each { rollbackTaskDefJson.remove(it) }
+
+                            rollbackTaskDefJson.containerDefinitions[0].image = env.ROLLBACK_IMAGE
+                            writeJSON file: 'rollback-task-def.json', json: rollbackTaskDefJson
+
+                            def newTaskDefArn = sh(
+                                script: "aws ecs register-task-definition --cli-input-json file://rollback-task-def.json --query 'taskDefinition.taskDefinitionArn' --output text",
+                                returnStdout: true
+                            ).trim()
+                            env.NEW_TASK_DEF_ARN = newTaskDefArn
+
+                            echo "✅ Registered rollback task definition: ${env.NEW_TASK_DEF_ARN}"
+
+                            def tgCheck = sh(
+                                script: "aws elbv2 describe-target-groups --target-group-arns ${env.ROLLBACK_TG_ARN} --query 'TargetGroups[0]' --output json",
+                                returnStdout: true
+                            ).trim()
+                            def tgJson = readJSON text: tgCheck
+
+                            if (!tgJson.containsKey('LoadBalancerArns') || tgJson.LoadBalancerArns.size() == 0) {
+                                echo "⚠️ Target group not associated with LB. Associating now..."
+
+                                def existingRules = sh(
+                                    script: "aws elbv2 describe-rules --listener-arn ${env.LISTENER_ARN} --query 'Rules[?Actions[0].TargetGroupArn==`${env.ROLLBACK_TG_ARN}`].RuleArn' --output text || echo ''",
+                                    returnStdout: true
+                                ).trim()
+
+                                if (existingRules) {
+                                    echo "🧹 Deleting existing rules for target group..."
+                                    existingRules.split().each { ruleArn ->
+                                        sh "aws elbv2 delete-rule --rule-arn ${ruleArn}"
+                                    }
+                                }
+
+                                def prioritiesJson = readJSON text: sh(
+                                    script: "aws elbv2 describe-rules --listener-arn ${env.LISTENER_ARN} --query 'Rules[?Priority!=`default`].Priority' --output json",
+                                    returnStdout: true
+                                ).trim()
+
+                                def priority = 100
+                                while (prioritiesJson.contains(priority.toString())) {
+                                    priority++
+                                }
+
+                                sh """
+                                    aws elbv2 create-rule \
+                                    --listener-arn ${env.LISTENER_ARN} \
+                                    --priority ${priority} \
+                                    --conditions '[{"Field":"path-pattern","Values":["/rollback-path*"]}]' \
+                                    --actions '[{"Type":"forward","TargetGroupArn":"${env.ROLLBACK_TG_ARN}"}]'
+                                """
+
+                                echo "✅ Associated rollback target group with ALB using priority ${priority}"
+                                sh "sleep 10"
+                            }
+
+                            def serviceStatus = sh(
+                                script: "aws ecs describe-services --cluster ${env.ECS_CLUSTER} --services ${env.ROLLBACK_SERVICE} --query 'services[0].status' --output text || echo MISSING",
+                                returnStdout: true
+                            ).trim()
+
+                            if (serviceStatus == "MISSING" || serviceStatus == "INACTIVE") {
+                                echo "🆕 Creating rollback service..."
+                                sh """
+                                    aws ecs create-service \
+                                    --cluster ${env.ECS_CLUSTER} \
+                                    --service-name ${env.ROLLBACK_SERVICE} \
+                                    --task-definition ${env.NEW_TASK_DEF_ARN} \
+                                    --desired-count 1 \
+                                    --load-balancers targetGroupArn=${env.ROLLBACK_TG_ARN},containerName=${env.CONTAINER_NAME},containerPort=${env.CONTAINER_PORT}
+                                """
+                            } else {
+                                echo "🔁 Updating rollback service with new task definition..."
+                                sh """
+                                    aws ecs update-service \
+                                    --cluster ${env.ECS_CLUSTER} \
+                                    --service ${env.ROLLBACK_SERVICE} \
+                                    --task-definition ${env.NEW_TASK_DEF_ARN}
+                                """
+                            }
+
+                            echo "✅ Rollback ECS service prepared successfully"
                         }
                     }
                 }
