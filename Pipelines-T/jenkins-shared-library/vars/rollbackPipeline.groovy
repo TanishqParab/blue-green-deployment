@@ -525,12 +525,30 @@ def call(Map config) {
                             echo "🔄 Switching traffic to ${env.ROLLBACK_ENV} for rollback"
                             
                             try {
-                                // Switch 100% traffic to the rollback environment
-                                sh """
-                                aws elbv2 modify-listener --listener-arn ${env.LISTENER_ARN} --default-actions Type=forward,TargetGroupArn=${env.ROLLBACK_TG_ARN}
-                                """
+                                // Validate target group ARN
+                                if (!env.ROLLBACK_TG_ARN || env.ROLLBACK_TG_ARN == "null") {
+                                    error "❌ Invalid rollback target group ARN: ${env.ROLLBACK_TG_ARN}"
+                                }
                                 
-                                echo "✅ Traffic switched 100% to ${env.ROLLBACK_ENV}"
+                                echo "Using rollback target group ARN: ${env.ROLLBACK_TG_ARN}"
+                                
+                                // Get current target group to verify it's different
+                                def currentTargetGroup = sh(
+                                    script: """
+                                    aws elbv2 describe-listeners --listener-arns ${env.LISTENER_ARN} --query 'Listeners[0].DefaultActions[0].ForwardConfig.TargetGroups[0].TargetGroupArn || Listeners[0].DefaultActions[0].TargetGroupArn' --output text
+                                    """,
+                                    returnStdout: true
+                                ).trim()
+                                
+                                if (currentTargetGroup == env.ROLLBACK_TG_ARN) {
+                                    echo "⚠️ Traffic is already routed to ${env.ROLLBACK_ENV}, no change needed"
+                                } else {
+                                    // Switch 100% traffic to the rollback environment
+                                    sh """
+                                    aws elbv2 modify-listener --listener-arn ${env.LISTENER_ARN} --default-actions Type=forward,TargetGroupArn=${env.ROLLBACK_TG_ARN}
+                                    """
+                                    echo "✅ Traffic switched 100% to ${env.ROLLBACK_ENV}"
+                                }
                                 
                                 // Remove the test rule if it exists
                                 sh """
@@ -541,15 +559,6 @@ def call(Map config) {
                                 fi
                                 """
                                 
-                                // Verify the traffic distribution
-                                def currentConfig = sh(
-                                    script: """
-                                    aws elbv2 describe-listeners --listener-arns ${env.LISTENER_ARN} --query 'Listeners[0].DefaultActions[0]' --output json
-                                    """,
-                                    returnStdout: true
-                                ).trim()
-                                
-                                echo "Current listener configuration: ${currentConfig}"
                                 echo "✅✅✅ Rollback completed successfully!"
                             } catch (Exception e) {
                                 error "Failed to switch traffic for rollback: ${e.message}"
