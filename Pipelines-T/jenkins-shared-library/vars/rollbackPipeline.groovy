@@ -306,132 +306,94 @@ def call(Map config) {
                             }
                             
                         } else if (config.implementation == 'ecs') {
-                            // ECS implementation - Find previous version
-                            echo "Finding previous version for rollback..."
-                            
-                            try {
-                                // Validate required services are set
-                                if (!env.CURRENT_SERVICE || !env.ROLLBACK_SERVICE) {
-                                    error "❌ Current or rollback service not defined"
-                                }
-                                
-                                // Get the current task definition with proper validation
-                                def currentTaskDef = sh(
-                                    script: """
-                                    aws ecs describe-services \
-                                        --cluster ${env.ECS_CLUSTER} \
-                                        --services ${env.CURRENT_SERVICE} \
-                                        --query 'services[0].taskDefinition' \
-                                        --output text
-                                    """,
-                                    returnStdout: true
-                                ).trim()
-                                
-                                if (!currentTaskDef || currentTaskDef == 'None') {
-                                    error "❌ Failed to get current task definition for service ${env.CURRENT_SERVICE}"
-                                }
-                                
-                                echo "Current task definition ARN: ${currentTaskDef}"
-                                
-                                // Get task definition details with validation
-                                def taskDefJson
-                                try {
-                                    def taskDef = sh(
-                                        script: """
-                                        aws ecs describe-task-definition \
-                                            --task-definition ${currentTaskDef} \
-                                            --query 'taskDefinition' \
-                                            --output json
-                                        """,
-                                        returnStdout: true
-                                    ).trim()
-                                    taskDefJson = readJSON text: taskDef
-                                } catch (Exception e) {
-                                    error "Failed to get task definition details: ${e.message}"
-                                }
-                                
-                                // Get container image with validation
-                                // Get container image with validation
-                                def currentImage = null
-                                if (taskDefJson && taskDefJson.containerDefinitions && !taskDefJson.containerDefinitions.isEmpty()) {
-                                    currentImage = taskDefJson.containerDefinitions[0].image
-                                }
-                                if (!currentImage) {
-                                    error "❌ Could not determine current container image"
-                                }
-                                echo "Current image: ${currentImage}"
-                                
-                                // Get ECR repository URI
-                                def ecrRepoUri = sh(
-                                    script: """
-                                    aws ecr describe-repositories \
-                                        --repository-names ${env.ECR_REPO_NAME} \
-                                        --query 'repositories[0].repositoryUri' \
-                                        --output text
-                                    """,
-                                    returnStdout: true
-                                ).trim()
-                                
-                                if (!ecrRepoUri) {
-                                    error "❌ Failed to get ECR repository URI"
-                                }
-                                
-                                // Get current image tag
-                                def currentTag = currentImage.contains(":") ? currentImage.split(":")[1] : "latest"
-                                echo "Current image tag: ${currentTag}"
-                                
-                                // Find previous image with proper error handling
-                                def previousImageTag = null
-                                try {
-                                    def imagesOutput = sh(
-                                        script: """
-                                        aws ecr describe-images \
-                                            --repository-name ${env.ECR_REPO_NAME} \
-                                            --query 'sort_by(imageDetails,&imagePushedAt)[].[imageTags[0],imagePushedAt,imageDigest]' \
-                                            --output json
-                                        """,
-                                        returnStdout: true
-                                    ).trim()
-                                    
-                                    def imagesJson = readJSON text: imagesOutput
-                                    
-                                    if (imagesJson.size() < 2) {
-                                        error "❌ Need at least 2 images in repository for rollback"
-                                    }
-                                    
-                                    // Sort newest first and find previous image
-                                    imagesJson = imagesJson.reverse()
-                                    
-                                    def currentImageIndex = imagesJson.findIndexOf { it[0] == currentTag }
-                                    if (currentImageIndex == -1) {
-                                        previousImageTag = imagesJson[1][0]  // Second newest if current not found
-                                    } else if (currentImageIndex < imagesJson.size() - 1) {
-                                        previousImageTag = imagesJson[currentImageIndex + 1][0]  // Next image after current
-                                    } else {
-                                        previousImageTag = imagesJson[1][0]  // Second newest if current is oldest
-                                    }
-                                    
-                                    if (!previousImageTag) {
-                                        error "❌ Could not determine previous image tag"
-                                    }
-                                    
-                                    env.ROLLBACK_IMAGE = "${ecrRepoUri}:${previousImageTag}"
-                                    echo "✅ Rollback image: ${env.ROLLBACK_IMAGE}"
-                                    
-                                } catch (Exception e) {
-                                    error "Failed to find previous image: ${e.message}"
-                                }
-                                
-                                // Rest of your prepare rollback logic...
-                                
-                            } catch (Exception e) {
-                                error "Failed to prepare rollback: ${e.message}"
+                            echo "🔄 Preparing ECS rollback..."
+
+                            if (!env.CURRENT_SERVICE || !env.ROLLBACK_SERVICE) {
+                                error "❌ CURRENT_SERVICE or ROLLBACK_SERVICE not set. Ensure Fetch Resources stage executed properly."
                             }
+
+                            def currentTaskDef = sh(
+                                script: """
+                                    aws ecs describe-services \\
+                                        --cluster ${env.ECS_CLUSTER} \\
+                                        --services ${env.CURRENT_SERVICE} \\
+                                        --query 'services[0].taskDefinition' \\
+                                        --output text
+                                """,
+                                returnStdout: true
+                            ).trim()
+
+                            if (!currentTaskDef || currentTaskDef == 'None') {
+                                error "❌ Could not determine current task definition for service ${env.CURRENT_SERVICE}"
+                            }
+
+                            echo "🧾 Current task definition ARN: ${currentTaskDef}"
+
+                            def taskDefJson = readJSON text: sh(
+                                script: """
+                                    aws ecs describe-task-definition \\
+                                        --task-definition ${currentTaskDef} \\
+                                        --query 'taskDefinition' \\
+                                        --output json
+                                """, returnStdout: true
+                            )
+
+                            def currentImage = taskDefJson?.containerDefinitions?.getAt(0)?.image
+                            if (!currentImage) {
+                                error "❌ Could not determine current container image"
+                            }
+
+                            echo "📦 Current container image: ${currentImage}"
+
+                            def currentTag = currentImage.contains(":") ? currentImage.split(":")[1] : "latest"
+
+                            def ecrRepoUri = sh(
+                                script: """
+                                    aws ecr describe-repositories \\
+                                        --repository-names ${env.ECR_REPO_NAME} \\
+                                        --query 'repositories[0].repositoryUri' \\
+                                        --output text
+                                """,
+                                returnStdout: true
+                            ).trim()
+
+                            def imagesJson = readJSON text: sh(
+                                script: """
+                                    aws ecr describe-images \\
+                                        --repository-name ${env.ECR_REPO_NAME} \\
+                                        --query 'imageDetails[*].[imageTags[0], imagePushedAt]' \\
+                                        --output json
+                                """,
+                                returnStdout: true
+                            )
+
+                            if (!imagesJson || imagesJson.size() < 2) {
+                                error "❌ Not enough images in ECR repo to determine rollback"
+                            }
+
+                            // Sort descending by pushedAt
+                            imagesJson = imagesJson.sort { a, b -> b[1] <=> a[1] }
+
+                            def currentIndex = imagesJson.findIndexOf { it[0] == currentTag }
+
+                            def previousImageTag
+                            if (currentIndex >= 0 && currentIndex + 1 < imagesJson.size()) {
+                                previousImageTag = imagesJson[currentIndex + 1][0]
+                            } else {
+                                previousImageTag = imagesJson[1][0]
+                            }
+
+                            if (!previousImageTag) {
+                                error "❌ Failed to determine previous image tag for rollback"
+                            }
+
+                            env.ROLLBACK_IMAGE = "${ecrRepoUri}:${previousImageTag}"
+                            echo "✅ Rollback image: ${env.ROLLBACK_IMAGE}"
                         }
                     }
                 }
             }
-            
+               
             
             stage('Test Rollback Environment') {
                 when {
