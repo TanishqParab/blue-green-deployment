@@ -111,68 +111,90 @@ def call(Map config) {
                                     script: "aws ecs list-clusters --query 'clusterArns[0]' --output text | awk -F'/' '{print \$2}'",
                                     returnStdout: true
                                 ).trim()
-                        
+                            
                                 if (!env.ECS_CLUSTER || env.ECS_CLUSTER == "None") {
-                                    env.ECS_CLUSTER = "blue-green-cluster"
+                                    env.ECS_CLUSTER = "blue-green-cluster"  // fallback cluster name
                                 }
                                 echo "✅ ECS Cluster: ${env.ECS_CLUSTER}"
-                            } catch (Exception e) {
-                                error "❌ Failed to get ECS cluster: ${e.message}"
-                            }
-
-
-                            def currentTaskDef = sh(
-                                script: "aws ecs describe-services --cluster ${env.ECS_CLUSTER} --services ${env.CURRENT_SERVICE} --query 'services[0].taskDefinition' --output text",
-                                returnStdout: true
-                            ).trim()
-                            echo "📦 Current Task Definition ARN: ${currentTaskDef}"
-
-                            def taskDefJsonText = sh(
-                                script: "aws ecs describe-task-definition --task-definition ${currentTaskDef} --query 'taskDefinition' --output json",
-                                returnStdout: true
-                            ).trim()
-
-                            def taskDefJson = readJSON text: taskDefJsonText
-                            def currentImage = taskDefJson.containerDefinitions[0].image
-                            echo "🖼️ Current container image: ${currentImage}"
-
-                            def ecrRepoName = env.ECR_REPO_NAME
-                            def imageListCmd = """
-                                aws ecr describe-images --repository-name ${ecrRepoName} \
-                                --query 'sort_by(imageDetails,&imagePushedAt)[].[imageTags[0],imagePushedAt,imageDigest]' --output json
-                            """
-                            def imagesJson = readJSON text: sh(script: imageListCmd, returnStdout: true).trim()
-
-                            if (imagesJson.size() < 2) {
-                                error "❌ Not enough images in ECR for rollback (need at least 2)"
-                            }
-
-                            def ecrRepoUri = sh(
-                                script: "aws ecr describe-repositories --repository-names ${ecrRepoName} --query 'repositories[0].repositoryUri' --output text",
-                                returnStdout: true
-                            ).trim()
-
-                            def currentTag = currentImage.contains(":") ? currentImage.split(":")[1] : "latest"
-                            imagesJson = imagesJson.reverse()
-
-                            def previousTag = null
-                            for (int i = 0; i < imagesJson.size(); i++) {
-                                if (imagesJson[i][0] == currentTag && i + 1 < imagesJson.size()) {
-                                    previousTag = imagesJson[i + 1][0]
-                                    break
+                            
+                                // Ensure CURRENT_SERVICE is set
+                                if (!env.CURRENT_SERVICE || env.CURRENT_SERVICE == "null" || env.CURRENT_SERVICE.trim() == "") {
+                                    error "❌ CURRENT_SERVICE environment variable is not set or invalid. Please set it to your ECS service name."
                                 }
-                            }
-
-                            if (previousTag == null) {
-                                previousTag = imagesJson[1][0]
-                            }
-
-                            env.ROLLBACK_IMAGE = "${ecrRepoUri}:${previousTag}"
-                            env.CONTAINER_NAME = taskDefJson.containerDefinitions[0].name
-                            env.CURRENT_TASK_DEF_JSON = taskDefJsonText
-
-                            echo "✅ Rollback image found: ${env.ROLLBACK_IMAGE}"
-                            echo "✅ Container name: ${env.CONTAINER_NAME}"
+                                echo "✅ ECS Service: ${env.CURRENT_SERVICE}"
+                            
+                                // Fetch current Task Definition ARN from ECS Service
+                                def currentTaskDef = sh(
+                                    script: "aws ecs describe-services --cluster ${env.ECS_CLUSTER} --services ${env.CURRENT_SERVICE} --query 'services[0].taskDefinition' --output text",
+                                    returnStdout: true
+                                ).trim()
+                            
+                                if (!currentTaskDef || currentTaskDef == "None") {
+                                    error "❌ ECS service '${env.CURRENT_SERVICE}' not found or has no active task definition."
+                                }
+                                echo "📦 Current Task Definition ARN: ${currentTaskDef}"
+                            
+                                // Describe the Task Definition JSON
+                                def taskDefJsonText = sh(
+                                    script: "aws ecs describe-task-definition --task-definition ${currentTaskDef} --query 'taskDefinition' --output json",
+                                    returnStdout: true
+                                ).trim()
+                            
+                                def taskDefJson = readJSON text: taskDefJsonText
+                                def currentImage = taskDefJson.containerDefinitions[0].image
+                                echo "🖼️ Current container image: ${currentImage}"
+                            
+                                // Get ECR repo name from environment
+                                def ecrRepoName = env.ECR_REPO_NAME
+                                if (!ecrRepoName || ecrRepoName.trim() == "") {
+                                    error "❌ ECR_REPO_NAME environment variable is not set."
+                                }
+                                echo "✅ ECR Repository: ${ecrRepoName}"
+                            
+                                // List images sorted by push date (ascending)
+                                def imageListCmd = """
+                                    aws ecr describe-images --repository-name ${ecrRepoName} \
+                                    --query 'sort_by(imageDetails,&imagePushedAt)[].[imageTags[0],imagePushedAt,imageDigest]' --output json
+                                """
+                                def imagesJson = readJSON text: sh(script: imageListCmd, returnStdout: true).trim()
+                            
+                                if (imagesJson.size() < 2) {
+                                    error "❌ Not enough images in ECR for rollback (need at least 2)."
+                                }
+                            
+                                // Get ECR repo URI
+                                def ecrRepoUri = sh(
+                                    script: "aws ecr describe-repositories --repository-names ${ecrRepoName} --query 'repositories[0].repositoryUri' --output text",
+                                    returnStdout: true
+                                ).trim()
+                                echo "✅ ECR Repository URI: ${ecrRepoUri}"
+                            
+                                // Extract current tag from image URI
+                                def currentTag = currentImage.contains(":") ? currentImage.split(":")[1] : "latest"
+                            
+                                // Reverse list so latest images are first
+                                imagesJson = imagesJson.reverse()
+                            
+                                // Find previous tag for rollback
+                                def previousTag = null
+                                for (int i = 0; i < imagesJson.size(); i++) {
+                                    if (imagesJson[i][0] == currentTag && i + 1 < imagesJson.size()) {
+                                        previousTag = imagesJson[i + 1][0]
+                                        break
+                                    }
+                                }
+                                // Fallback if not found in loop
+                                if (previousTag == null) {
+                                    previousTag = imagesJson[1][0]
+                                }
+                            
+                                // Set environment variables for rollback
+                                env.ROLLBACK_IMAGE = "${ecrRepoUri}:${previousTag}"
+                                env.CONTAINER_NAME = taskDefJson.containerDefinitions[0].name
+                                env.CURRENT_TASK_DEF_JSON = taskDefJsonText
+                            
+                                echo "✅ Rollback image found: ${env.ROLLBACK_IMAGE}"
+                                echo "✅ Container name: ${env.CONTAINER_NAME}"
                         }
                     }
                 }
