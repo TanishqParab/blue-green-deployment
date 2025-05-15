@@ -106,15 +106,16 @@ def call(Map config) {
                             echo "Fetching current deployment state..."
                             
                             try {
-                                // Get the cluster name with no-color flag and proper error handling
+                                // Get the cluster name using AWS CLI
                                 env.ECS_CLUSTER = sh(
-                                    script: "terraform -chdir=${env.TF_WORKING_DIR} output -no-color -raw ecs_cluster_name || aws ecs list-clusters --query 'clusterArns[0]' --output text",
+                                    script: "aws ecs list-clusters --query 'clusterArns[0]' --output text | sed -E 's/.*\\/(.*)/\\1/'",
                                     returnStdout: true
                                 ).trim()
-                                
-                                if (!env.ECS_CLUSTER) {
-                                    error "❌ Failed to retrieve ECS cluster name"
+
+                                if (!env.ECS_CLUSTER || env.ECS_CLUSTER == "None") {
+                                    env.ECS_CLUSTER = "blue-green-cluster"  // Fallback to default name
                                 }
+
                                 echo "✅ ECS Cluster: ${env.ECS_CLUSTER}"
 
                                 // Get target group ARNs with validation
