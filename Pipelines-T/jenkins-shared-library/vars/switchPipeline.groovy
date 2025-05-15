@@ -202,6 +202,49 @@ def call(Map config) {
                     }
                 }
             }
+
+            stage('Ensure Target Group Association') {
+                when {
+                    expression { 
+                        (config.implementation == 'ecs' && env.DEPLOY_NEW_VERSION == 'true')
+                    }
+                }
+                steps {
+                    script {
+                        if (config.implementation == 'ecs') {
+                            echo "Ensuring target group is associated with load balancer..."
+                            
+                            // Check if the target group is associated with a load balancer
+                            def targetGroupInfo = sh(
+                                script: """
+                                aws elbv2 describe-target-groups --target-group-arns ${env.IDLE_TG_ARN} --query 'TargetGroups[0].LoadBalancerArns' --output json
+                                """,
+                                returnStdout: true
+                            ).trim()
+                            
+                            def targetGroupJson = readJSON text: targetGroupInfo
+                            
+                            if (targetGroupJson.size() == 0) {
+                                echo "⚠️ Target group ${env.IDLE_ENV} is not associated with a load balancer. Creating a path-based rule..."
+                                
+                                // Create a rule to associate the target group with the load balancer
+                                sh """
+                                # Create a new rule with priority 100
+                                aws elbv2 create-rule --listener-arn ${env.LISTENER_ARN} --priority 100 --conditions '[{"Field":"path-pattern","Values":["/associate-tg*"]}]' --actions '[{"Type":"forward","TargetGroupArn":"${env.IDLE_TG_ARN}"}]'
+                                """
+                                
+                                // Wait for the association to take effect
+                                sleep(10)
+                                
+                                echo "✅ Target group associated with load balancer via path rule"
+                            } else {
+                                echo "✅ Target group is already associated with load balancer"
+                            }
+                        }
+                    }
+                }
+            }
+
             
             stage('Update Application') {
                 when {
