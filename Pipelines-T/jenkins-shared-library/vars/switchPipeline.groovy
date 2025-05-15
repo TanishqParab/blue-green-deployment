@@ -59,13 +59,19 @@ def call(Map config) {
                                     script: "git diff --name-only HEAD~1 HEAD || git diff --name-only",
                                     returnStdout: true
                                 ).trim().split('\n')
+                                echo "ECS changed files: ${changedFiles}"
                             } catch (Exception e) {
                                 echo "Could not get changed files, assuming first run or new branch"
                                 env.DEPLOY_NEW_VERSION = 'true'  // Default to deploying on first run
                                 return
                             }
                             
-                            def appChanged = changedFiles.any { it.contains('app.py') }
+                            // More comprehensive check for app.py changes
+                            def appChanged = changedFiles.any { 
+                                it.contains('app.py') || 
+                                it.endsWith('/app.py') || 
+                                it.contains('modules/ecs/scripts/app.py')
+                            }
                             
                             if (appChanged) {
                                 echo "🚀 Detected app.py changes, will deploy new version"
@@ -78,6 +84,7 @@ def call(Map config) {
                     }
                 }
             }
+
             
             stage('Checkout') {
                 when {
