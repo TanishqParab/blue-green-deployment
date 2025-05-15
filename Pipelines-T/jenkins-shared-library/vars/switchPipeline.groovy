@@ -52,32 +52,25 @@ def call(Map config) {
                                 env.EXECUTION_TYPE = 'FULL_DEPLOY'
                             }
                         } else if (config.implementation == 'ecs') {
-                            // ECS implementation
-                            def changedFiles = []
+                            // ECS implementation - Always deploy new version
+                            echo "🚀 ECS implementation - always deploying new version"
+                            env.DEPLOY_NEW_VERSION = 'true'
+                            
+                            // Still try to detect changes for logging purposes
                             try {
-                                changedFiles = sh(
+                                def changedFiles = sh(
                                     script: "git diff --name-only HEAD~1 HEAD || git diff --name-only",
                                     returnStdout: true
                                 ).trim().split('\n')
+                                echo "ECS changed files (for logging only): ${changedFiles}"
                             } catch (Exception e) {
-                                echo "Could not get changed files, assuming first run or new branch"
-                                env.DEPLOY_NEW_VERSION = 'true'  // Default to deploying on first run
-                                return
-                            }
-                            
-                            def appChanged = changedFiles.any { it.contains('app.py') }
-                            
-                            if (appChanged) {
-                                echo "🚀 Detected app.py changes, will deploy new version"
-                                env.DEPLOY_NEW_VERSION = 'true'
-                            } else {
-                                echo "No app.py changes detected, will only switch traffic if needed"
-                                env.DEPLOY_NEW_VERSION = 'false'
+                                echo "Could not get changed files: ${e.message}"
                             }
                         }
                     }
                 }
             }
+
             
             stage('Checkout') {
                 when {
