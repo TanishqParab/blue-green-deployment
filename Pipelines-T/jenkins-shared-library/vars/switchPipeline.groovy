@@ -52,19 +52,27 @@ def call(Map config) {
                                 env.EXECUTION_TYPE = 'FULL_DEPLOY'
                             }
                         } else if (config.implementation == 'ecs') {
-                            // ECS implementation - Always deploy new version
-                            echo "🚀 ECS implementation - always deploying new version"
-                            env.DEPLOY_NEW_VERSION = 'true'
-                            
-                            // Still try to detect changes for logging purposes
+                            // ECS implementation
+                            def changedFiles = []
                             try {
-                                def changedFiles = sh(
+                                changedFiles = sh(
                                     script: "git diff --name-only HEAD~1 HEAD || git diff --name-only",
                                     returnStdout: true
                                 ).trim().split('\n')
-                                echo "ECS changed files (for logging only): ${changedFiles}"
                             } catch (Exception e) {
-                                echo "Could not get changed files: ${e.message}"
+                                echo "Could not get changed files, assuming first run or new branch"
+                                env.DEPLOY_NEW_VERSION = 'true'  // Default to deploying on first run
+                                return
+                            }
+                            
+                            def appChanged = changedFiles.any { it.contains('app.py') }
+                            
+                            if (appChanged) {
+                                echo "🚀 Detected app.py changes, will deploy new version"
+                                env.DEPLOY_NEW_VERSION = 'true'
+                            } else {
+                                echo "No app.py changes detected, will only switch traffic if needed"
+                                env.DEPLOY_NEW_VERSION = 'false'
                             }
                         }
                     }
@@ -297,46 +305,6 @@ def call(Map config) {
                             
                             echo "✅ Instances successfully registered to correct target groups!"
                             
-                            // Deploy to Blue Instance
-                            def blueInstanceIP = sh(
-                                script: """
-                                aws ec2 describe-instances --filters "Name=tag:Name,Values=Blue-Instance" "Name=instance-state-name,Values=running" \
-                                --query 'Reservations[0].Instances[0].PublicIpAddress' --output text
-                                """,
-                                returnStdout: true
-                            ).trim()
-
-                            if (!blueInstanceIP) {
-                                error "❌ No running Blue instance found!"
-                            }
-
-                            echo "✅ Deploying to Blue instance: ${blueInstanceIP}"
-
-                            sshagent([env.SSH_KEY_ID]) {
-                                sh "scp -o StrictHostKeyChecking=no ${env.TF_WORKING_DIR}/modules/ec2/scripts/${env.APP_FILE} ec2-user@${blueInstanceIP}:/home/ec2-user/${env.APP_FILE}"
-                                sh "ssh ec2-user@${blueInstanceIP} 'sudo systemctl restart flaskapp.service'"
-                            }
-
-                            env.BLUE_INSTANCE_IP = blueInstanceIP
-                            
-                            // Wait for Blue Instance to Become Healthy
-                            echo "🔍 Monitoring health of Blue instance: ${blueInstanceId}"
-
-                            def healthStatus = ''
-                            def attempts = 0
-                            def maxAttempts = 30
-                            
-                            while (healthStatus != 'healthy' && attempts < maxAttempts) {
-                                sleep(10)
-                                healthStatus = sh(script: "aws elbv2 describe-target-health --target-group-arn ${env.BLUE_TG_ARN} --targets Id=${blueInstanceId} --query 'TargetHealthDescriptions[0].TargetHealth.State' --output text", returnStdout: true).trim()
-                                attempts++
-                            }
-
-                            if (healthStatus != 'healthy') {
-                                error "❌ Blue instance failed to become healthy after ${maxAttempts} attempts!"
-                            }
-
-                            echo "✅ Blue instance is healthy!"
                         } else if (config.implementation == 'ecs') {
                             // ECS implementation - Build and push new image
                             echo "Updating application code for ${env.IDLE_ENV} environment..."
@@ -479,6 +447,102 @@ def call(Map config) {
                     }
                 }
             }
+
+            stage('Manual Approval Before Switch Traffic EC2') {
+                when {
+                    expression { config.implementation == 'ec2' && env.EXECUTION_TYPE == 'APP_DEPLOY' }
+                }
+                steps {
+                    script {
+                        def buildLink = "${env.BUILD_URL}input"
+
+                        emailext (
+                            to: config.emailRecipient,
+                            subject: "Approval required to switch traffic - Build ${currentBuild.number}",
+                            body: """
+                                Please review the deployment and approve to switch traffic to the BLUE target group.
+                                
+                                🔗 Click here to approve: ${buildLink}
+                            """,
+                            replyTo: config.emailRecipient
+                        )
+
+                        timeout(time: 1, unit: 'HOURS') {
+                            input message: 'Do you want to switch traffic to the new BLUE deployment?', ok: 'Switch Traffic'
+                        }
+                    }
+                }
+            }
+            
+            stage('Deploy to Blue EC2 Instance') {
+                when {
+                    expression { config.implementation == 'ec2' }
+                }
+                steps {
+                    script {
+                        // Get Blue Instance IP
+                        def blueInstanceIP = sh(
+                            script: """
+                            aws ec2 describe-instances --filters "Name=tag:Name,Values=Blue-Instance" "Name=instance-state-name,Values=running" \
+                            --query 'Reservations[0].Instances[0].PublicIpAddress' --output text
+                            """,
+                            returnStdout: true
+                        ).trim()
+
+                        if (!blueInstanceIP) {
+                            error "❌ No running Blue instance found!"
+                        }
+
+                        echo "✅ Deploying to Blue instance: ${blueInstanceIP}"
+
+                        // Copy App and Restart Service
+                        sshagent([env.SSH_KEY_ID]) {
+                            sh "scp -o StrictHostKeyChecking=no ${env.TF_WORKING_DIR}/modules/ec2/scripts/${env.APP_FILE} ec2-user@${blueInstanceIP}:/home/ec2-user/${env.APP_FILE}"
+                            sh "ssh ec2-user@${blueInstanceIP} 'sudo systemctl restart flaskapp.service'"
+                        }
+
+                        env.BLUE_INSTANCE_IP = blueInstanceIP
+
+                        // Health Check for Blue Instance
+                        echo "🔍 Monitoring health of Blue instance..."
+
+                        def blueInstanceId = sh(
+                            script: """
+                            aws ec2 describe-instances --filters "Name=tag:Name,Values=Blue-Instance" "Name=instance-state-name,Values=running" \
+                            --query 'Reservations[0].Instances[0].InstanceId' --output text
+                            """,
+                            returnStdout: true
+                        ).trim()
+
+                        def healthStatus = ''
+                        def attempts = 0
+                        def maxAttempts = 30
+
+                        while (healthStatus != 'healthy' && attempts < maxAttempts) {
+                            sleep(10)
+                            healthStatus = sh(
+                                script: """
+                                aws elbv2 describe-target-health \
+                                --target-group-arn ${env.BLUE_TG_ARN} \
+                                --targets Id=${blueInstanceId} \
+                                --query 'TargetHealthDescriptions[0].TargetHealth.State' \
+                                --output text
+                                """,
+                                returnStdout: true
+                            ).trim()
+                            attempts++
+                            echo "Health status check attempt ${attempts}: ${healthStatus}"
+                        }
+
+                        if (healthStatus != 'healthy') {
+                            error "❌ Blue instance failed to become healthy after ${maxAttempts} attempts!"
+                        }
+
+                        echo "✅ Blue instance is healthy!"
+                    }
+                }
+            }
+
             
             stage('Test Environment') {
                 when {
@@ -539,51 +603,32 @@ def call(Map config) {
                 }
             }
             
-            stage('Manual Approval Before Switch Traffic') {
+            stage('Manual Approval Before Switch Traffic ECS') {
                 when {
-                    expression { 
-                        (config.implementation == 'ec2' && env.EXECUTION_TYPE == 'APP_DEPLOY') || 
-                        (config.implementation == 'ecs' && env.DEPLOY_NEW_VERSION == 'true')
-                    }
+                    expression { config.implementation == 'ecs' && env.DEPLOY_NEW_VERSION == 'true' }
                 }
                 steps {
                     script {
                         def buildLink = "${env.BUILD_URL}input"
-                        
-                        if (config.implementation == 'ec2') {
-                            emailext (
-                                to: config.emailRecipient,
-                                subject: "Approval required to switch traffic - Build ${currentBuild.number}",
-                                body: """
-                                    Please review the deployment and approve to switch traffic to the BLUE target group.
-                                    🔗 Click here to approve: ${buildLink}
-                                """,
-                                replyTo: config.emailRecipient
-                            )
 
-                            timeout(time: 1, unit: 'HOURS') {
-                                input message: 'Do you want to switch traffic to the new BLUE deployment?', ok: 'Switch Traffic'
-                            }
-                        } else if (config.implementation == 'ecs') {
-                            emailext (
-                                to: config.emailRecipient,
-                                subject: "Approval required to switch traffic - Build ${currentBuild.number}",
-                                body: """
-                                    Please review the deployment and approve to switch traffic.
-                                    
-                                    Current LIVE environment: ${env.LIVE_ENV}
-                                    New environment to make LIVE: ${env.IDLE_ENV}
-                                    
-                                    You can test the new version at: http://${env.ALB_DNS}/test
-                                    
-                                    🔗 Click here to approve: ${buildLink}
-                                """,
-                                replyTo: config.emailRecipient
-                            )
+                        emailext (
+                            to: config.emailRecipient,
+                            subject: "Approval required to switch traffic - Build ${currentBuild.number}",
+                            body: """
+                                Please review the deployment and approve to switch traffic.
 
-                            timeout(time: 1, unit: 'HOURS') {
-                                input message: "Do you want to switch traffic from ${env.LIVE_ENV} to ${env.IDLE_ENV}?", ok: 'Switch Traffic'
-                            }
+                                Current LIVE environment: ${env.LIVE_ENV}
+                                New environment to make LIVE: ${env.IDLE_ENV}
+
+                                You can test the new version at: http://${env.ALB_DNS}/test
+
+                                🔗 Click here to approve: ${buildLink}
+                            """,
+                            replyTo: config.emailRecipient
+                        )
+
+                        timeout(time: 1, unit: 'HOURS') {
+                            input message: "Do you want to switch traffic from ${env.LIVE_ENV} to ${env.IDLE_ENV}?", ok: 'Switch Traffic'
                         }
                     }
                 }
