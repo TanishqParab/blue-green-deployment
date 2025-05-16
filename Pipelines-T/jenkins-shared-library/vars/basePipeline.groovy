@@ -15,9 +15,6 @@ def call(Map config) {
             choice(name: 'MANUAL_BUILD', choices: ['YES', 'DESTROY', 'NO'], description: 'YES: Run Terraform, DESTROY: Destroy Infra, NO: Auto Deploy App Changes')
         }
 
-        triggers {
-            githubPush()
-        }
 
         stages {
             stage('Initialize') {
