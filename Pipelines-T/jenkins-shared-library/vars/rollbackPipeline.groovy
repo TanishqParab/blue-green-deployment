@@ -394,16 +394,7 @@ def call(Map config) {
                                 // Store the task definition for later use
                                 env.CURRENT_TASK_DEF_JSON = taskDef
                                 
-                                // Register new task definition
-                                def taskDefJson = readJSON text: env.CURRENT_TASK_DEF_JSON
-                                taskDefJson.containerDefinitions[0].image = env.ROLLBACK_IMAGE
-                                ['taskDefinitionArn', 'revision', 'status'].each { taskDefJson.remove(it) }
-                                
-                                writeJSON file: 'rollback-task-def.json', json: taskDefJson
-                                env.NEW_TASK_DEF_ARN = sh(
-                                    script: "aws ecs register-task-definition --cli-input-json file://rollback-task-def.json --query 'taskDefinition.taskDefinitionArn' --output text",
-                                    returnStdout: true
-                                ).trim()
+
 
                                 // Ensure target group association
                                 def tgJson = readJSON text: sh(
