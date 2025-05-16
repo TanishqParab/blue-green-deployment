@@ -279,6 +279,79 @@ def call(Map config) {
                 }
             }
 
+            
+            stage('Register EC2 Instances to Target Groups') {
+                when {
+                    expression { config.implementation == 'ec2' }
+                }
+                steps {
+                    script {
+                        echo "Fetching Target Group ARNs from AWS..."
+
+                        env.BLUE_TG_ARN = sh(
+                            script: """
+                            aws elbv2 describe-target-groups --names "blue-tg" --query 'TargetGroups[0].TargetGroupArn' --output text
+                            """,
+                            returnStdout: true
+                        ).trim()
+
+                        env.GREEN_TG_ARN = sh(
+                            script: """
+                            aws elbv2 describe-target-groups --names "green-tg" --query 'TargetGroups[0].TargetGroupArn' --output text
+                            """,
+                            returnStdout: true
+                        ).trim()
+
+                        if (!env.BLUE_TG_ARN || !env.GREEN_TG_ARN) {
+                            error "❌ Failed to fetch Target Group ARNs! Check if they exist in AWS."
+                        }
+
+                        echo "✅ Blue Target Group ARN: ${env.BLUE_TG_ARN}"
+                        echo "✅ Green Target Group ARN: ${env.GREEN_TG_ARN}"
+
+                        echo "Fetching EC2 instance IDs..."
+
+                        def blueInstanceId = sh(
+                            script: """
+                            aws ec2 describe-instances --filters "Name=tag:Name,Values=Blue-Instance" "Name=instance-state-name,Values=running" \
+                            --query 'Reservations[0].Instances[0].InstanceId' --output text
+                            """,
+                            returnStdout: true
+                        ).trim()
+
+                        def greenInstanceId = sh(
+                            script: """
+                            aws ec2 describe-instances --filters "Name=tag:Name,Values=Green-Instance" "Name=instance-state-name,Values=running" \
+                            --query 'Reservations[0].Instances[0].InstanceId' --output text
+                            """,
+                            returnStdout: true
+                        ).trim()
+
+                        if (!blueInstanceId || !greenInstanceId) {
+                            error "❌ Blue or Green instance not found! Check AWS console."
+                        }
+
+                        echo "✅ Blue Instance ID: ${blueInstanceId}"
+                        echo "✅ Green Instance ID: ${greenInstanceId}"
+
+                        echo "❌ Deregistering old instances before re-registering..."
+                        sh """
+                            aws elbv2 deregister-targets --target-group-arn ${env.BLUE_TG_ARN} --targets Id=${greenInstanceId}
+                            aws elbv2 deregister-targets --target-group-arn ${env.GREEN_TG_ARN} --targets Id=${blueInstanceId}
+                        """
+                        sleep(10) // Allow time for deregistration
+
+                        echo "✅ Registering instances to the correct target groups..."
+                        sh """
+                            aws elbv2 register-targets --target-group-arn ${env.BLUE_TG_ARN} --targets Id=${blueInstanceId}
+                            aws elbv2 register-targets --target-group-arn ${env.GREEN_TG_ARN} --targets Id=${greenInstanceId}
+                        """
+
+                        echo "✅ EC2 instances successfully registered to correct target groups!"
+                    }
+                }
+            }
+
             stage('Manual Approval for Destroy') {
                 when {
                     expression { params.MANUAL_BUILD == 'DESTROY' }
