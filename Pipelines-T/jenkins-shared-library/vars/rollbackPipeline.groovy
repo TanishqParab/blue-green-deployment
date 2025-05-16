@@ -297,18 +297,32 @@ def call(Map config) {
 
                             try {
                                 // Find previous image version
-                                def imagesJson = readJSON text: sh(
+                                // Get all image tags sorted by push time (descending), i.e., latest first
+                                def imagesJsonText = sh(
                                     script: """
                                     aws ecr describe-images --repository-name ${env.ECR_REPO_NAME} \
                                     --query 'sort_by(imageDetails,&imagePushedAt)[].[imageTags[0],imagePushedAt]' \
                                     --output json
                                     """,
                                     returnStdout: true
-                                ).trim().reverse()
-                                
-                                def currentTag = env.CURRENT_IMAGE.split(':').last()
-                                def previousTag = imagesJson.findResult { it[0] == currentTag ? null : it[0] } ?: imagesJson[1][0]
-                                env.ROLLBACK_IMAGE = "${sh(script: "aws ecr describe-repositories --repository-names ${env.ECR_REPO_NAME} --query 'repositories[0].repositoryUri' --output text").trim()}:${previousTag}"
+                                ).trim()
+
+                                def imagesJson = readJSON text: imagesJsonText
+
+                                // Extract current image tag (e.g., v1.2.3 from image:tag)
+                                def currentTag = env.CURRENT_IMAGE.split(':')[-1]
+
+                                // Find previous image tag
+                                def previousTag = null
+                                for (int i = 0; i < imagesJson.size(); i++) {
+                                    if (imagesJson[i][0] == currentTag && i + 1 < imagesJson.size()) {
+                                        previousTag = imagesJson[i + 1][0]
+                                        break
+                                    }
+                                }
+                                if (!previousTag) {
+                                    error "No previous image tag found in ECR for rollback."
+                                }
                                 
                                 // Register new task definition
                                 def taskDefJson = readJSON text: env.CURRENT_TASK_DEF_JSON
