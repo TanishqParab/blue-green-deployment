@@ -297,32 +297,102 @@ def call(Map config) {
 
                             try {
                                 // Find previous image version
-                                // Get all image tags sorted by push time (descending), i.e., latest first
-                                def imagesJsonText = sh(
+                                // Get the current task definition
+                                def currentTaskDef = sh(
                                     script: """
-                                    aws ecr describe-images --repository-name ${env.ECR_REPO_NAME} \
-                                    --query 'sort_by(imageDetails,&imagePushedAt)[].[imageTags[0],imagePushedAt]' \
-                                    --output json
+                                    aws ecs describe-services --cluster ${env.ECS_CLUSTER} --services ${env.CURRENT_SERVICE} --query 'services[0].taskDefinition' --output text
                                     """,
                                     returnStdout: true
                                 ).trim()
-
-                                def imagesJson = readJSON text: imagesJsonText
-
-                                // Extract current image tag (e.g., v1.2.3 from image:tag)
-                                def currentTag = env.CURRENT_IMAGE.split(':')[-1]
-
-                                // Find previous image tag
-                                def previousTag = null
+                                
+                                echo "Current task definition: ${currentTaskDef}"
+                                
+                                // Get the current task definition details
+                                def taskDef = sh(
+                                    script: """
+                                    aws ecs describe-task-definition --task-definition ${currentTaskDef} --query 'taskDefinition' --output json
+                                    """,
+                                    returnStdout: true
+                                ).trim()
+                                
+                                // Parse the task definition
+                                def taskDefJson = readJSON text: taskDef
+                                
+                                // Get the current image
+                                def currentImage = taskDefJson.containerDefinitions[0].image
+                                echo "Current image: ${currentImage}"
+                                
+                                // Extract the repository name from the ECR URI
+                                def ecrRepoName = env.ECR_REPO_NAME
+                                
+                                // List all images in the repository sorted by push date (newest first)
+                                def imagesCmd = """
+                                aws ecr describe-images --repository-name ${ecrRepoName} --query 'sort_by(imageDetails,&imagePushedAt)[].[imageTags[0],imagePushedAt,imageDigest]' --output json
+                                """
+                                
+                                def imagesOutput = sh(script: imagesCmd, returnStdout: true).trim()
+                                def imagesJson = readJSON text: imagesOutput
+                                
+                                echo "Found ${imagesJson.size()} images in repository"
+                                
+                                if (imagesJson.size() < 2) {
+                                    error "❌ Not enough images found in ECR repository. Need at least 2 images for rollback."
+                                }
+                                
+                                // Get the ECR repository URI
+                                def ecrRepoUri = sh(
+                                    script: """
+                                    aws ecr describe-repositories --repository-names ${ecrRepoName} --query 'repositories[0].repositoryUri' --output text
+                                    """,
+                                    returnStdout: true
+                                ).trim()
+                                
+                                // Get the current image tag
+                                def currentTag = currentImage.contains(":") ? currentImage.split(":")[1] : "latest"
+                                echo "Current image tag: ${currentTag}"
+                                
+                                // Find the previous image (not the current one)
+                                def previousImageTag = null
+                                def previousImageInfo = null
+                                
+                                // Sort images by push date (newest first)
+                                imagesJson = imagesJson.reverse()
+                                
+                                // Find the current image in the list
+                                def currentImageIndex = -1
                                 for (int i = 0; i < imagesJson.size(); i++) {
-                                    if (imagesJson[i][0] == currentTag && i + 1 < imagesJson.size()) {
-                                        previousTag = imagesJson[i + 1][0]
+                                    if (imagesJson[i][0] == currentTag) {
+                                        currentImageIndex = i
                                         break
                                     }
                                 }
-                                if (!previousTag) {
-                                    error "No previous image tag found in ECR for rollback."
+                                
+                                if (currentImageIndex == -1) {
+                                    // Current image not found, use the second newest image
+                                    previousImageInfo = imagesJson[1]
+                                } else if (currentImageIndex < imagesJson.size() - 1) {
+                                    // Use the image before the current one
+                                    previousImageInfo = imagesJson[currentImageIndex + 1]
+                                } else {
+                                    // Current image is the oldest, use the second newest
+                                    previousImageInfo = imagesJson[1]
                                 }
+                                
+                                previousImageTag = previousImageInfo[0]
+                                
+                                // Construct the rollback image URI
+                                env.ROLLBACK_IMAGE = "${ecrRepoUri}:${previousImageTag}"
+                                
+                                echo "✅ Found previous image for rollback: ${env.ROLLBACK_IMAGE}"
+                                echo "✅ Previous image tag: ${previousImageTag}"
+                                echo "✅ Previous image pushed at: ${previousImageInfo[1]}"
+                                
+                                // Get container name from task definition
+                                env.CONTAINER_NAME = taskDefJson.containerDefinitions[0].name
+                                echo "✅ Container name: ${env.CONTAINER_NAME}"
+                                
+                                // Store the task definition for later use
+                                env.CURRENT_TASK_DEF_JSON = taskDef
                                 
                                 // Register new task definition
                                 def taskDefJson = readJSON text: env.CURRENT_TASK_DEF_JSON
