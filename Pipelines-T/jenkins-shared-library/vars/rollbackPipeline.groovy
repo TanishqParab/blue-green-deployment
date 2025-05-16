@@ -422,6 +422,24 @@ def call(Map config) {
                                         --actions Type=forward,TargetGroupArn=${env.ROLLBACK_TG_ARN}
                                     """
                                 }
+                                
+                                def newTaskDefJson = taskDefJson
+                                newTaskDefJson.containerDefinitions[0].image = env.ROLLBACK_IMAGE
+
+                                writeJSON file: 'rollback-task-def.json', json: newTaskDefJson
+
+                                def registeredTaskDefArn = sh(
+                                    script: """
+                                    aws ecs register-task-definition \
+                                        --cli-input-json file://rollback-task-def.json \
+                                        --query 'taskDefinition.taskDefinitionArn' \
+                                        --output text
+                                    """, returnStdout: true
+                                ).trim()
+
+                                env.NEW_TASK_DEF_ARN = registeredTaskDefArn
+                                echo "🆕 New rollback task definition ARN: ${env.NEW_TASK_DEF_ARN}"
+
 
                                 // Update/Create ECS service
                                 def serviceStatus = sh(
