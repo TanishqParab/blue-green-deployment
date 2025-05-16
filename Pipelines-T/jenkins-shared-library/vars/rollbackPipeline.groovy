@@ -393,78 +393,176 @@ def call(Map config) {
                                 
                                 // Store the task definition for later use
                                 env.CURRENT_TASK_DEF_JSON = taskDef
-                                
 
-
-                                // Ensure target group association
-                                // Ensure target group association
-                                def tgJson = readJSON text: sh(
-                                    script: "aws elbv2 describe-target-groups --target-group-arns ${env.ROLLBACK_TG_ARN} --output json",
+                                // Get the task definition for the ROLLBACK service
+                                def rollbackServiceTaskDef = sh(
+                                    script: """
+                                    aws ecs describe-services --cluster ${env.ECS_CLUSTER} --services ${env.ROLLBACK_SERVICE} --query 'services[0].taskDefinition' --output text || echo "MISSING"
+                                    """,
                                     returnStdout: true
                                 ).trim()
-
-                                if (tgJson.TargetGroups[0].LoadBalancerArns.isEmpty()) {
-                                    echo "🔗 Associating target group with ALB..."
-
-                                    // Get the current number of rules to calculate a safe priority
-                                    def currentRuleCount = sh(
-                                        script: "aws elbv2 describe-rules --listener-arn ${env.LISTENER_ARN} --query 'length(Rules)' --output text",
+                                
+                                def taskDefJson
+                                
+                                if (rollbackServiceTaskDef != "MISSING" && rollbackServiceTaskDef != "None") {
+                                    // Get the rollback service's task definition details
+                                    def rollbackTaskDef = sh(
+                                        script: """
+                                        aws ecs describe-task-definition --task-definition ${rollbackServiceTaskDef} --query 'taskDefinition' --output json
+                                        """,
                                         returnStdout: true
                                     ).trim()
-
-                                    def newPriority = (currentRuleCount.toInteger() + 1).toString()
-
-                                    sh """
-                                    aws elbv2 create-rule \
-                                        --listener-arn ${env.LISTENER_ARN} \
-                                        --priority ${newPriority} \
-                                        --conditions Field=path-pattern,Values='/rollback-healthcheck*' \
-                                        --actions Type=forward,TargetGroupArn=${env.ROLLBACK_TG_ARN}
-                                    """
+                                    
+                                    taskDefJson = readJSON text: rollbackTaskDef
+                                } else {
+                                    // If rollback service doesn't exist, use the current service's task definition
+                                    taskDefJson = readJSON text: env.CURRENT_TASK_DEF_JSON
                                 }
                                 
-                                def newTaskDefJson = taskDefJson
-                                newTaskDefJson.containerDefinitions[0].image = env.ROLLBACK_IMAGE
-
-                                writeJSON file: 'rollback-task-def.json', json: newTaskDefJson
-
-                                def registeredTaskDefArn = sh(
+                                // Remove fields that shouldn't be included when registering a new task definition
+                                ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes', 'compatibilities', 
+                                'registeredAt', 'registeredBy', 'deregisteredAt'].each { field ->
+                                    taskDefJson.remove(field)
+                                }
+                                
+                                // Update the container image to the rollback image
+                                taskDefJson.containerDefinitions[0].image = env.ROLLBACK_IMAGE
+                                
+                                // Store the container name for later use
+                                env.CONTAINER_NAME = taskDefJson.containerDefinitions[0].name
+                                echo "Using container name: ${env.CONTAINER_NAME}"
+                                
+                                // Write the updated task definition to a file
+                                writeJSON file: 'rollback-task-def.json', json: taskDefJson
+                                
+                                // Register the task definition for rollback
+                                def newTaskDefArn = sh(
                                     script: """
-                                    aws ecs register-task-definition \
-                                        --cli-input-json file://rollback-task-def.json \
-                                        --query 'taskDefinition.taskDefinitionArn' \
-                                        --output text
-                                    """, returnStdout: true
-                                ).trim()
-
-                                env.NEW_TASK_DEF_ARN = registeredTaskDefArn
-                                echo "🆕 New rollback task definition ARN: ${env.NEW_TASK_DEF_ARN}"
-
-
-                                // Update/Create ECS service
-                                def serviceStatus = sh(
-                                    script: "aws ecs describe-services --cluster ${env.ECS_CLUSTER} --services ${env.ROLLBACK_SERVICE} --query 'services[0].status' --output text",
+                                    aws ecs register-task-definition --cli-input-json file://rollback-task-def.json --query 'taskDefinition.taskDefinitionArn' --output text
+                                    """,
                                     returnStdout: true
                                 ).trim()
                                 
-                                if (serviceStatus == "INACTIVE" || serviceStatus == "None") {
+                                env.NEW_TASK_DEF_ARN = newTaskDefArn
+                                
+                                echo "✅ Registered new task definition for rollback: ${env.NEW_TASK_DEF_ARN}"
+
+                                // Check if the target group is associated with load balancer
+                                echo "Checking if target group is associated with load balancer..."
+                                def targetGroupInfo = sh(
+                                    script: """
+                                    aws elbv2 describe-target-groups --target-group-arns ${env.ROLLBACK_TG_ARN} --query 'TargetGroups[0]' --output json
+                                    """,
+                                    returnStdout: true
+                                ).trim()
+                                
+                                def targetGroupJson = readJSON text: targetGroupInfo
+                                echo "Target group info: ${targetGroupJson}"
+                                
+                                if (!targetGroupJson.containsKey('LoadBalancerArns') || targetGroupJson.LoadBalancerArns.size() == 0) {
+                                    echo "⚠️ Target group ${env.ROLLBACK_ENV} is not associated with any load balancer. Creating association..."
+                                    
+                                    // Find existing rules for this target group
+                                    def existingRules = sh(
+                                        script: """
+                                        aws elbv2 describe-rules --listener-arn ${env.LISTENER_ARN} --query 'Rules[?Actions[0].TargetGroupArn==`${env.ROLLBACK_TG_ARN}`].RuleArn' --output text || echo ""
+                                        """,
+                                        returnStdout: true
+                                    ).trim()
+                                    
+                                    // If there are existing rules, delete them
+                                    if (existingRules) {
+                                        echo "Found existing rules for this target group. Deleting them first..."
+                                        existingRules.split().each { ruleArn ->
+                                            sh """
+                                            aws elbv2 delete-rule --rule-arn ${ruleArn}
+                                            """
+                                        }
+                                        echo "Deleted existing rules for target group"
+                                    }
+                                    
+                                    // Find an available priority
+                                    def usedPriorities = sh(
+                                        script: """
+                                        aws elbv2 describe-rules --listener-arn ${env.LISTENER_ARN} --query 'Rules[?Priority!=`default`].Priority' --output json
+                                        """,
+                                        returnStdout: true
+                                    ).trim()
+                                    
+                                    def usedPrioritiesJson = readJSON text: usedPriorities
+                                    def priority = 100
+                                    
+                                    // Find the first available priority starting from 100
+                                    while (usedPrioritiesJson.contains(priority.toString())) {
+                                        priority++
+                                    }
+                                    
+                                    echo "Using priority ${priority} for the new rule"
+                                    
+                                    // Create a rule with the available priority
                                     sh """
-                                    aws ecs create-service \
-                                        --cluster ${env.ECS_CLUSTER} \
-                                        --service-name ${env.ROLLBACK_SERVICE} \
-                                        --task-definition ${env.NEW_TASK_DEF_ARN} \
-                                        --desired-count 1 \
+                                    aws elbv2 create-rule --listener-arn ${env.LISTENER_ARN} --priority ${priority} --conditions '[{"Field":"path-pattern","Values":["/rollback-association-path*"]}]' --actions '[{"Type":"forward","TargetGroupArn":"${env.ROLLBACK_TG_ARN}"}]'
+                                    """
+                                    
+                                    echo "✅ Created rule with priority ${priority} to associate target group with load balancer"
+                                    
+                                    // Wait for the association to take effect
+                                    echo "Waiting for target group association to take effect..."
+                                    sh "sleep 10"
+                                    
+                                    // Verify the association was successful
+                                    def verifyAssociation = sh(
+                                        script: """
+                                        aws elbv2 describe-target-groups --target-group-arns ${env.ROLLBACK_TG_ARN} --query 'TargetGroups[0].LoadBalancerArns' --output json
+                                        """,
+                                        returnStdout: true
+                                    ).trim()
+                                    
+                                    def verifyJson = readJSON text: verifyAssociation
+                                    
+                                    if (verifyJson.size() == 0) {
+                                        error "Failed to associate target group with load balancer after multiple attempts"
+                                    }
+                                    
+                                    echo "✅ Target group successfully associated with load balancer"
+                                }
+                                
+                                // Check if the rollback service exists
+                                echo "Checking if rollback service exists..."
+                                def serviceExists = sh(
+                                    script: """
+                                    aws ecs describe-services --cluster ${env.ECS_CLUSTER} --services ${env.ROLLBACK_SERVICE} --query 'services[0].status' --output text || echo "MISSING"
+                                    """,
+                                    returnStdout: true
+                                ).trim()
+                                
+                                echo "Service status: ${serviceExists}"
+                                
+                                if (serviceExists == "MISSING" || serviceExists == "INACTIVE") {
+                                    echo "⚠️ Rollback service ${env.ROLLBACK_SERVICE} does not exist or is inactive. Creating new service..."
+                                    
+                                    // Create a new service with load balancer
+                                    sh """
+                                    aws ecs create-service \\
+                                        --cluster ${env.ECS_CLUSTER} \\
+                                        --service-name ${env.ROLLBACK_SERVICE} \\
+                                        --task-definition ${env.NEW_TASK_DEF_ARN} \\
+                                        --desired-count 1 \\
                                         --load-balancers targetGroupArn=${env.ROLLBACK_TG_ARN},containerName=${env.CONTAINER_NAME},containerPort=${env.CONTAINER_PORT}
                                     """
                                 } else {
+                                    // Update the existing service
                                     sh """
-                                    aws ecs update-service \
-                                        --cluster ${env.ECS_CLUSTER} \
-                                        --service ${env.ROLLBACK_SERVICE} \
-                                        --task-definition ${env.NEW_TASK_DEF_ARN} \
+                                    aws ecs update-service \\
+                                        --cluster ${env.ECS_CLUSTER} \\
+                                        --service ${env.ROLLBACK_SERVICE} \\
+                                        --task-definition ${env.NEW_TASK_DEF_ARN} \\
+                                        --desired-count 1 \\
                                         --force-new-deployment
                                     """
                                 }
+                                
+                                echo "✅ ${env.ROLLBACK_ENV} service updated with previous version task definition"
                                 
                                 // Wait for service stabilization
                                 sh """
