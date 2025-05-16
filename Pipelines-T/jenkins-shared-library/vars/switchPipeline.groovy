@@ -473,31 +473,6 @@ def call(Map config) {
                 }
             }
 
-            stage('Manual Approval Before Switch Traffic EC2') {
-                when {
-                    expression { config.implementation == 'ec2' && env.EXECUTION_TYPE == 'APP_DEPLOY' }
-                }
-                steps {
-                    script {
-                        def buildLink = "${env.BUILD_URL}input"
-
-                        emailext (
-                            to: config.emailRecipient,
-                            subject: "Approval required to switch traffic - Build ${currentBuild.number}",
-                            body: """
-                                Please review the deployment and approve to switch traffic to the BLUE target group.
-                                
-                                🔗 Click here to approve: ${buildLink}
-                            """,
-                            replyTo: config.emailRecipient
-                        )
-
-                        timeout(time: 1, unit: 'HOURS') {
-                            input message: 'Do you want to switch traffic to the new BLUE deployment?', ok: 'Switch Traffic'
-                        }
-                    }
-                }
-            }
             
             stage('Deploy to Blue EC2 Instance') {
                 when {
