@@ -397,17 +397,27 @@ def call(Map config) {
 
 
                                 // Ensure target group association
+                                // Ensure target group association
                                 def tgJson = readJSON text: sh(
                                     script: "aws elbv2 describe-target-groups --target-group-arns ${env.ROLLBACK_TG_ARN} --output json",
                                     returnStdout: true
                                 ).trim()
-                                
+
                                 if (tgJson.TargetGroups[0].LoadBalancerArns.isEmpty()) {
                                     echo "🔗 Associating target group with ALB..."
+
+                                    // Get the current number of rules to calculate a safe priority
+                                    def currentRuleCount = sh(
+                                        script: "aws elbv2 describe-rules --listener-arn ${env.LISTENER_ARN} --query 'length(Rules)' --output text",
+                                        returnStdout: true
+                                    ).trim()
+
+                                    def newPriority = (currentRuleCount.toInteger() + 1).toString()
+
                                     sh """
                                     aws elbv2 create-rule \
                                         --listener-arn ${env.LISTENER_ARN} \
-                                        --priority ${sh(script: "aws elbv2 describe-rules --listener-arn ${env.LISTENER_ARN} --query 'length(Rules)' --output text")} \
+                                        --priority ${newPriority} \
                                         --conditions Field=path-pattern,Values='/rollback-healthcheck*' \
                                         --actions Type=forward,TargetGroupArn=${env.ROLLBACK_TG_ARN}
                                     """
