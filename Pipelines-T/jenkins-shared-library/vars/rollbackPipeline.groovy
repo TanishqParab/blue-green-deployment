@@ -402,7 +402,6 @@ def call(Map config) {
                                     returnStdout: true
                                 ).trim()
                                 
-                                def taskDefJson
                                 
                                 if (rollbackServiceTaskDef != "MISSING" && rollbackServiceTaskDef != "None") {
                                     // Get the rollback service's task definition details
