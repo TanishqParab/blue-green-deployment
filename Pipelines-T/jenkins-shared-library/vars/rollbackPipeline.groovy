@@ -188,7 +188,7 @@ def call(Map config) {
                 }
             }
 
-            stage('Manual Approval Before Rollback') {
+            stage('Manual Approval Before Rollback EC2') {
                 when {
                     expression { return config.implementation == 'ec2' }
                 }
@@ -642,7 +642,7 @@ def call(Map config) {
                 }
             }
             
-            stage('Manual Approval Before Rollback') {
+            stage('Manual Approval Before Rollback ECS') {
                 when {
                     expression { config.implementation == 'ecs' }
                 }
