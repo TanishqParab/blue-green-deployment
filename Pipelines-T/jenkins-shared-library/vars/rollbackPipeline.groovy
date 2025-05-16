@@ -188,6 +188,28 @@ def call(Map config) {
                 }
             }
 
+            stage('Manual Approval Before Rollback') {
+                when {
+                    expression { return config.implementation == 'ec2' }
+                }
+                steps {
+                    script {
+                        def buildLink = "${env.BUILD_URL}input"
+
+                        emailext (
+                            to: config.emailRecipient,
+                            subject: "🛑 Approval required for ROLLBACK - Build #${currentBuild.number}",
+                            body: "A rollback has been triggered. Please review and approve the rollback at: ${buildLink}",
+                            replyTo: config.emailRecipient
+                        )
+
+                        timeout(time: 1, unit: 'HOURS') {
+                            input message: '🚨 Confirm rollback and approve execution', ok: 'Rollback'
+                        }
+                    }
+                }
+            }
+
             stage('Prepare Rollback') {
                 steps {
                     script {
@@ -621,22 +643,14 @@ def call(Map config) {
             }
             
             stage('Manual Approval Before Rollback') {
+                when {
+                    expression { config.implementation == 'ecs' }
+                }
                 steps {
                     script {
                         def buildLink = "${env.BUILD_URL}input"
                         
-                        if (config.implementation == 'ec2') {
-                            emailext (
-                                to: config.emailRecipient,
-                                subject: "🛑 Approval required for ROLLBACK - Build #${currentBuild.number}",
-                                body: "A rollback has been triggered. Please review and approve the rollback at: ${buildLink}",
-                                replyTo: config.emailRecipient
-                            )
-
-                            timeout(time: 1, unit: 'HOURS') {
-                                input message: '🚨 Confirm rollback and approve execution', ok: 'Rollback'
-                            }
-                        } else if (config.implementation == 'ecs') {
+                        if (config.implementation == 'ecs') {
                             emailext (
                                 to: config.emailRecipient,
                                 subject: "Approval required for rollback - Build ${currentBuild.number}",
