@@ -383,17 +383,44 @@ def switchTraffic(Map config) {
 
 
 def scaleDownOldEnvironment(Map config) {
-    echo "Scaling down old ${config.liveEnv} environment..."
+    echo "Scaling down old environment..."
 
     try {
+        // Discover ECS cluster dynamically if not provided
+        def ecsCluster = config.ecsCluster ?: sh(
+            script: "aws ecs list-clusters --query 'clusterArns[0]' --output text",
+            returnStdout: true
+        ).trim()
+
+        if (!ecsCluster || ecsCluster == 'None') {
+            error "No ECS cluster found to scale down"
+        }
+
+        // Discover service dynamically if not provided
+        def liveService = config.liveService ?: sh(
+            script: "aws ecs list-services --cluster ${ecsCluster} --query 'serviceArns[0]' --output text",
+            returnStdout: true
+        ).trim()
+
+        if (!liveService || liveService == 'None') {
+            error "No ECS service found to scale down in cluster ${ecsCluster}"
+        }
+
+        // Extract short service name from ARN if needed
+        if (liveService.contains('/')) {
+            liveService = liveService.tokenize('/').last()
+        }
+
+        echo "Scaling down service '${liveService}' in cluster '${ecsCluster}'..."
+
         sh """
-        aws ecs update-service --cluster ${config.ecsCluster} --service ${config.liveService} --desired-count 0
+        aws ecs update-service --cluster ${ecsCluster} --service ${liveService} --desired-count 0
         """
 
-        echo "✅ Previous live service (${config.liveEnv}) scaled down"
+        echo "✅ Previous live service scaled down"
 
         sh """
-        aws ecs wait services-stable --cluster ${config.ecsCluster} --services ${config.liveService}
+        aws ecs wait services-stable --cluster ${ecsCluster} --services ${liveService}
         """
 
         echo "✅ All services are stable"
