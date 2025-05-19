@@ -109,25 +109,21 @@ def detectChanges(Map config) {
 
     def changedFiles = []
     try {
-        // Try to get the list of changed files between last commit and current
+        // Get the list of files changed in the latest commit
         def gitDiff = sh(
-            script: '''
-                git rev-parse --verify HEAD^ && \
-                git diff --name-only HEAD^ HEAD || \
-                git diff --name-only
-            ''',
+            script: "git log -1 --name-only --pretty=format:",
             returnStdout: true
         ).trim()
 
         if (gitDiff) {
             changedFiles = gitDiff.split('\n')
         } else {
-            echo "📄 No changes detected in diff output."
+            echo "📄 No files changed in the latest commit."
         }
 
     } catch (Exception e) {
-        echo "⚠️ Could not determine changed files (possibly first run)."
-        changedFiles = ['app.py']  // Assume app.py to force deploy
+        echo "⚠️ Could not determine changed files. Assuming app.py changed to force deploy."
+        changedFiles = ['app.py']  // Fallback to trigger deploy
     }
 
     def appChanged = changedFiles.any { it.trim() == 'app.py' }
