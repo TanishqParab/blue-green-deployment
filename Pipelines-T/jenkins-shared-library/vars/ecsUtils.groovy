@@ -109,17 +109,28 @@ def detectChanges(Map config) {
 
     def changedFiles = []
     try {
-        changedFiles = sh(
-            script: "git diff --name-only HEAD~1 HEAD || git diff --name-only",
+        // Try to get the list of changed files between last commit and current
+        def gitDiff = sh(
+            script: '''
+                git rev-parse --verify HEAD^ && \
+                git diff --name-only HEAD^ HEAD || \
+                git diff --name-only
+            ''',
             returnStdout: true
-        ).trim().split('\n')
+        ).trim()
+
+        if (gitDiff) {
+            changedFiles = gitDiff.split('\n')
+        } else {
+            echo "📄 No changes detected in diff output."
+        }
+
     } catch (Exception e) {
-        echo "⚠️ Could not get changed files, assuming first run or new branch."
-        env.DEPLOY_NEW_VERSION = 'true'  // Default behavior
-        return
+        echo "⚠️ Could not determine changed files (possibly first run)."
+        changedFiles = ['app.py']  // Assume app.py to force deploy
     }
 
-    def appChanged = changedFiles.any { it.contains('app.py') }
+    def appChanged = changedFiles.any { it.trim() == 'app.py' }
 
     if (appChanged) {
         echo "🚀 Detected app.py changes, will deploy new version."
@@ -129,6 +140,7 @@ def detectChanges(Map config) {
         env.DEPLOY_NEW_VERSION = 'false'
     }
 }
+
 
 
 def fetchResources(Map config) {
