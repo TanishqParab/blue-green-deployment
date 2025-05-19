@@ -135,77 +135,68 @@ def detectChanges(Map config) {
 def fetchResources(Map config) {
     echo "🔄 Fetching ECS and ALB resources..."
 
+    def result = [:]
+
     try {
-        // Get ECS cluster name
-        env.ECS_CLUSTER = sh(
+        result.ECS_CLUSTER = sh(
             script: "terraform -chdir=${config.tfWorkingDir} output -raw ecs_cluster_id || aws ecs list-clusters --query 'clusterArns[0]' --output text",
             returnStdout: true
         ).trim()
 
-        // Get blue and green target group ARNs
-        env.BLUE_TG_ARN = sh(
-            script: """
-            aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text
-            """,
+        result.BLUE_TG_ARN = sh(
+            script: "aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text",
             returnStdout: true
         ).trim()
 
-        env.GREEN_TG_ARN = sh(
-            script: """
-            aws elbv2 describe-target-groups --names green-tg --query 'TargetGroups[0].TargetGroupArn' --output text
-            """,
+        result.GREEN_TG_ARN = sh(
+            script: "aws elbv2 describe-target-groups --names green-tg --query 'TargetGroups[0].TargetGroupArn' --output text",
             returnStdout: true
         ).trim()
 
-        // Get ALB ARN
-        env.ALB_ARN = sh(
-            script: """
-            aws elbv2 describe-load-balancers --names blue-green-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text
-            """,
+        result.ALB_ARN = sh(
+            script: "aws elbv2 describe-load-balancers --names blue-green-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text",
             returnStdout: true
         ).trim()
 
-        // Get listener ARN
-        env.LISTENER_ARN = sh(
-            script: """
-            aws elbv2 describe-listeners --load-balancer-arn ${env.ALB_ARN} --query 'Listeners[0].ListenerArn' --output text
-            """,
+        result.LISTENER_ARN = sh(
+            script: "aws elbv2 describe-listeners --load-balancer-arn ${result.ALB_ARN} --query 'Listeners[0].ListenerArn' --output text",
             returnStdout: true
         ).trim()
 
-        // Determine the currently LIVE environment
         def currentTargetGroup = sh(
             script: """
-            aws elbv2 describe-listeners --listener-arns ${env.LISTENER_ARN} \
+            aws elbv2 describe-listeners --listener-arns ${result.LISTENER_ARN} \
             --query 'Listeners[0].DefaultActions[0].ForwardConfig.TargetGroups[0].TargetGroupArn || Listeners[0].DefaultActions[0].TargetGroupArn' \
             --output text
             """,
             returnStdout: true
         ).trim()
 
-        if (currentTargetGroup == env.BLUE_TG_ARN) {
-            env.LIVE_ENV = "BLUE"
-            env.IDLE_ENV = "GREEN"
-            env.LIVE_TG_ARN = env.BLUE_TG_ARN
-            env.IDLE_TG_ARN = env.GREEN_TG_ARN
-            env.LIVE_SERVICE = "blue-service"
-            env.IDLE_SERVICE = "green-service"
+        if (currentTargetGroup == result.BLUE_TG_ARN) {
+            result.LIVE_ENV = "BLUE"
+            result.IDLE_ENV = "GREEN"
+            result.LIVE_TG_ARN = result.BLUE_TG_ARN
+            result.IDLE_TG_ARN = result.GREEN_TG_ARN
+            result.LIVE_SERVICE = "blue-service"
+            result.IDLE_SERVICE = "green-service"
         } else {
-            env.LIVE_ENV = "GREEN"
-            env.IDLE_ENV = "BLUE"
-            env.LIVE_TG_ARN = env.GREEN_TG_ARN
-            env.IDLE_TG_ARN = env.BLUE_TG_ARN
-            env.LIVE_SERVICE = "green-service"
-            env.IDLE_SERVICE = "blue-service"
+            result.LIVE_ENV = "GREEN"
+            result.IDLE_ENV = "BLUE"
+            result.LIVE_TG_ARN = result.GREEN_TG_ARN
+            result.IDLE_TG_ARN = result.BLUE_TG_ARN
+            result.LIVE_SERVICE = "green-service"
+            result.IDLE_SERVICE = "blue-service"
         }
 
-        echo "✅ ECS Cluster: ${env.ECS_CLUSTER}"
-        echo "✅ Blue Target Group ARN: ${env.BLUE_TG_ARN}"
-        echo "✅ Green Target Group ARN: ${env.GREEN_TG_ARN}"
-        echo "✅ ALB ARN: ${env.ALB_ARN}"
-        echo "✅ Listener ARN: ${env.LISTENER_ARN}"
-        echo "✅ Currently LIVE environment: ${env.LIVE_ENV}"
-        echo "✅ Currently IDLE environment: ${env.IDLE_ENV}"
+        echo "✅ ECS Cluster: ${result.ECS_CLUSTER}"
+        echo "✅ Blue TG: ${result.BLUE_TG_ARN}"
+        echo "✅ Green TG: ${result.GREEN_TG_ARN}"
+        echo "✅ ALB ARN: ${result.ALB_ARN}"
+        echo "✅ Listener ARN: ${result.LISTENER_ARN}"
+        echo "✅ LIVE ENV: ${result.LIVE_ENV}"
+        echo "✅ IDLE ENV: ${result.IDLE_ENV}"
+
+        return result
 
     } catch (Exception e) {
         error "❌ Failed to fetch ECS resources: ${e.message}"
