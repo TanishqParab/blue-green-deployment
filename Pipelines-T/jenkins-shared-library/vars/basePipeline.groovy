@@ -97,7 +97,10 @@ def call(Map config) {
             
             stage('Register EC2 Instances to Target Groups') {
                 when {
-                    expression { config.implementation == 'ec2' }
+                    allOf {
+                        expression { config.implementation == 'ec2' }
+                        expression { params.MANUAL_BUILD != 'DESTROY' }
+                    }
                 }
                 steps {
                     script {
