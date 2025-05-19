@@ -76,7 +76,18 @@ def call(Map config) {
                         if (config.implementation == 'ec2') {
                             ec2Utils.fetchResources(config)
                         } else if (config.implementation == 'ecs') {
-                            ecsUtils.fetchResources(config)
+                            // fetchResources returns a map with keys like IDLE_TG_ARN, LISTENER_ARN, IDLE_ENV
+                            def resourceInfo = ecsUtils.fetchResources(config)
+
+                            // Store these in env variables or a map to use in later stages
+                            env.IDLE_TG_ARN = resourceInfo.IDLE_TG_ARN
+                            env.LISTENER_ARN = resourceInfo.LISTENER_ARN
+                            env.IDLE_ENV = resourceInfo.IDLE_ENV
+
+                            // Also update the config map with these so next stage can use it
+                            config.IDLE_TG_ARN = env.IDLE_TG_ARN
+                            config.LISTENER_ARN = env.LISTENER_ARN
+                            config.IDLE_ENV = env.IDLE_ENV
                         }
                     }
                 }
@@ -88,10 +99,16 @@ def call(Map config) {
                 }
                 steps {
                     script {
-                        ecsUtils.ensureTargetGroupAssociation(config)
+                        // Pass the updated config with required parameters explicitly
+                        ecsUtils.ensureTargetGroupAssociation([
+                            IDLE_TG_ARN: config.IDLE_TG_ARN,
+                            LISTENER_ARN: config.LISTENER_ARN,
+                            IDLE_ENV: config.IDLE_ENV
+                        ])
                     }
                 }
             }
+
 
             stage('Manual Approval Before Switch Traffic EC2') {
                 when { expression { config.implementation == 'ec2' && env.EXECUTION_TYPE == 'APP_DEPLOY' } }
@@ -166,7 +183,18 @@ def call(Map config) {
                         if (config.implementation == 'ec2') {
                             ec2Utils.fetchResources(config)
                         } else if (config.implementation == 'ecs') {
-                            ecsUtils.fetchResources(config)
+                            // fetchResources returns a map with keys like IDLE_TG_ARN, LISTENER_ARN, IDLE_ENV
+                            def resourceInfo = ecsUtils.fetchResources(config)
+
+                            // Store these in env variables or a map to use in later stages
+                            env.IDLE_TG_ARN = resourceInfo.IDLE_TG_ARN
+                            env.LISTENER_ARN = resourceInfo.LISTENER_ARN
+                            env.IDLE_ENV = resourceInfo.IDLE_ENV
+
+                            // Also update the config map with these so next stage can use it
+                            config.IDLE_TG_ARN = env.IDLE_TG_ARN
+                            config.LISTENER_ARN = env.LISTENER_ARN
+                            config.IDLE_ENV = env.IDLE_ENV
                         }
                     }
                 }
