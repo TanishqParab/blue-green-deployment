@@ -109,34 +109,27 @@ def detectChanges(Map config) {
 
     def changedFiles = []
     try {
-        // Get the list of files changed in the latest commit
+        // Check for any file changes between last 2 commits
         def gitDiff = sh(
-            script: "git log -1 --name-only --pretty=format:",
+            script: "git diff --name-only HEAD~1 HEAD",
             returnStdout: true
         ).trim()
 
         if (gitDiff) {
             changedFiles = gitDiff.split('\n')
+            echo "📝 Changed files: ${changedFiles.join(', ')}"
+            echo "🚀 Change(s) detected. Triggering deployment."
+            env.DEPLOY_NEW_VERSION = 'true'
         } else {
-            echo "📄 No files changed in the latest commit."
+            echo "📄 No changes detected between last two commits."
+            env.DEPLOY_NEW_VERSION = 'false'
         }
 
     } catch (Exception e) {
-        echo "⚠️ Could not determine changed files. Assuming app.py changed to force deploy."
-        changedFiles = ['app.py']  // Fallback to trigger deploy
-    }
-
-    def appChanged = changedFiles.any { it.trim() == 'app.py' }
-
-    if (appChanged) {
-        echo "🚀 Detected app.py changes, will deploy new version."
+        echo "⚠️ Could not determine changed files. Assuming change occurred to force deploy."
         env.DEPLOY_NEW_VERSION = 'true'
-    } else {
-        echo "ℹ️ No app.py changes detected, skipping app deploy."
-        env.DEPLOY_NEW_VERSION = 'false'
     }
 }
-
 
 
 def fetchResources(Map config) {
