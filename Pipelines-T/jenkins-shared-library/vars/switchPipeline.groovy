@@ -33,20 +33,7 @@ def call(Map config) {
                     }
                 }
             }
-            
-            stage('Detect Changes') {
-                steps {
-                    script {
-                        if (config.implementation == 'ec2') {
-                            ec2Utils.detectChanges(config)
-                        } else if (config.implementation == 'ecs') {
-                            ecsUtils.detectChanges(config)
-                        }
-                    }
-                }
-            }
 
-            
             stage('Checkout') {
                 when {
                     expression { 
@@ -63,6 +50,19 @@ def call(Map config) {
                     }
                 }
             }
+            
+            stage('Detect Changes') {
+                steps {
+                    script {
+                        if (config.implementation == 'ec2') {
+                            ec2Utils.detectChanges(config)
+                        } else if (config.implementation == 'ecs') {
+                            ecsUtils.detectChanges(config)
+                        }
+                    }
+                }
+            }
+
             
             stage('Fetch Resources') {
                 when {
