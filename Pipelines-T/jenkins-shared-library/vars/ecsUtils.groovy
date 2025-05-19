@@ -240,6 +240,7 @@ def ensureTargetGroupAssociation(Map config) {
 }
 
 
+import groovy.json.JsonSlurperClassic
 
 def updateApplication(Map config) {
     echo "Running ECS update application logic..."
