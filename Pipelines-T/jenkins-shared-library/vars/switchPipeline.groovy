@@ -153,6 +153,25 @@ def call(Map config) {
                     }
                 }
             }
+
+            stage('Fetch ALB Resources') {
+                when {
+                    expression { 
+                        (config.implementation == 'ec2' && env.EXECUTION_TYPE == 'APP_DEPLOY') || 
+                        (config.implementation == 'ecs' && env.DEPLOY_NEW_VERSION == 'true')
+                    }
+                }
+                steps {
+                    script {
+                        if (config.implementation == 'ec2') {
+                            ec2Utils.fetchResources(config)
+                        } else if (config.implementation == 'ecs') {
+                            ecsUtils.fetchResources(config)
+                        }
+                    }
+                }
+            }
+
             
             stage('Switch Traffic') {
                 when {
