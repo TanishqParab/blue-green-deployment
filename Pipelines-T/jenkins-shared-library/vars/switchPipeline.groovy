@@ -243,27 +243,18 @@ def call(Map config) {
                 steps {
                     script {
                         if (config.implementation == 'ec2') {
-                            def ec2Utils = load 'path/to/ec2Utils.groovy'
-
-                            // Prepare config map for EC2
-                            def ec2Config = [
+                            // Call shared library method directly
+                            ec2Utils.tagSwapInstances([
                                 blueTag : 'Blue-Instance',
                                 greenTag: 'Green-Instance'
-                            ]
-
-                            ec2Utils.tagSwapInstances(ec2Config)
-
+                            ])
                         } else if (config.implementation == 'ecs') {
-                            def ecsUtils = load 'path/to/ecsUtils.groovy'
-
-                            // Prepare config map for ECS
-                            def ecsConfig = [
+                            // Call shared library method directly
+                            ecsUtils.scaleDownOldEnvironment([
                                 ecsCluster : env.ECS_CLUSTER,
                                 liveService: env.LIVE_SERVICE,
                                 liveEnv    : env.LIVE_ENV
-                            ]
-
-                            ecsUtils.scaleDownOldEnvironment(ecsConfig)
+                            ])
                         }
                     }
                 }
