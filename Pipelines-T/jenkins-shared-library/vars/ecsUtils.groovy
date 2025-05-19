@@ -242,15 +242,22 @@ def ensureTargetGroupAssociation(Map config) {
 
 
 import groovy.json.JsonSlurperClassic
+import groovy.json.JsonOutput
 
 def updateApplication(Map config) {
     echo "Running ECS update application logic..."
 
     try {
+        // Get the repository URI once and reuse
+        def repoUri = sh(
+            script: "aws ecr describe-repositories --repository-names '${env.ECR_REPO_NAME}' --query 'repositories[0].repositoryUri' --output text",
+            returnStdout: true
+        ).trim()
+
         // Get the current 'latest' image details
         def currentLatestImageInfo = sh(
             script: """
-            aws ecr describe-images --repository-name ${env.ECR_REPO_NAME} --image-ids imageTag=latest --query 'imageDetails[0].{digest:imageDigest,pushedAt:imagePushedAt}' --output json 2>/dev/null || echo '{}'
+            aws ecr describe-images --repository-name '${env.ECR_REPO_NAME}' --image-ids imageTag=latest --query 'imageDetails[0].{digest:imageDigest,pushedAt:imagePushedAt}' --output json 2>/dev/null || echo '{}'
             """,
             returnStdout: true
         ).trim()
@@ -267,8 +274,9 @@ def updateApplication(Map config) {
             echo "Tagging current 'latest' image as '${rollbackTag}' before overwriting..."
 
             sh """
-            aws ecr batch-get-image --repository-name ${env.ECR_REPO_NAME} --image-ids imageDigest=${currentLatestJson.digest} --query 'images[0].imageManifest' --output text > image-manifest.json
-            aws ecr put-image --repository-name ${env.ECR_REPO_NAME} --image-tag ${rollbackTag} --image-manifest file://image-manifest.json
+            aws ecr batch-get-image --repository-name '${env.ECR_REPO_NAME}' --image-ids imageDigest='${currentLatestJson.digest}' --query 'images[0].imageManifest' --output text > image-manifest.json
+            aws ecr put-image --repository-name '${env.ECR_REPO_NAME}' --image-tag '${rollbackTag}' --image-manifest file://image-manifest.json
+            rm -f image-manifest.json
             """
 
             echo "✅ Current 'latest' image tagged as '${rollbackTag}' for backup"
@@ -277,26 +285,23 @@ def updateApplication(Map config) {
             echo "⚠️ No current 'latest' image found to tag as rollback"
         }
 
-        // Build and push new image with 'latest' tag
+        // Build and push new image with 'latest' tag and version tag
         sh """
-        aws ecr get-login-password --region ${env.AWS_REGION} | docker login --username AWS --password-stdin \$(aws ecr describe-repositories --repository-names ${env.ECR_REPO_NAME} --query 'repositories[0].repositoryUri' --output text)
+        aws ecr get-login-password --region '${env.AWS_REGION}' | docker login --username AWS --password-stdin '${repoUri}'
 
-        cd ${env.TF_WORKING_DIR}/modules/ecs/scripts
+        cd '${env.TF_WORKING_DIR}/modules/ecs/scripts'
 
-        docker build -t ${env.ECR_REPO_NAME}:latest .
+        docker build -t '${env.ECR_REPO_NAME}:latest' .
 
-        docker tag ${env.ECR_REPO_NAME}:latest \$(aws ecr describe-repositories --repository-names ${env.ECR_REPO_NAME} --query 'repositories[0].repositoryUri' --output text):latest
+        docker tag '${env.ECR_REPO_NAME}:latest' '${repoUri}:latest'
 
-        docker tag ${env.ECR_REPO_NAME}:latest \$(aws ecr describe-repositories --repository-names ${env.ECR_REPO_NAME} --query 'repositories[0].repositoryUri' --output text):v${currentBuild.number}
+        docker tag '${env.ECR_REPO_NAME}:latest' '${repoUri}:v${currentBuild.number}'
 
-        docker push \$(aws ecr describe-repositories --repository-names ${env.ECR_REPO_NAME} --query 'repositories[0].repositoryUri' --output text):latest
-        docker push \$(aws ecr describe-repositories --repository-names ${env.ECR_REPO_NAME} --query 'repositories[0].repositoryUri' --output text):v${currentBuild.number}
+        docker push '${repoUri}:latest'
+        docker push '${repoUri}:v${currentBuild.number}'
         """
 
-        env.IMAGE_URI = sh(
-            script: "aws ecr describe-repositories --repository-names ${env.ECR_REPO_NAME} --query 'repositories[0].repositoryUri' --output text",
-            returnStdout: true
-        ).trim() + ":latest"
+        env.IMAGE_URI = "${repoUri}:latest"
 
         echo "✅ New image built and pushed: ${env.IMAGE_URI}"
         echo "✅ Also tagged as: v${currentBuild.number}"
@@ -309,28 +314,37 @@ def updateApplication(Map config) {
 
         def taskDefArn = sh(
             script: """
-            aws ecs describe-services --cluster ${env.ECS_CLUSTER} --services ${env.IDLE_SERVICE} --query 'services[0].taskDefinition' --output text
+            aws ecs describe-services --cluster '${env.ECS_CLUSTER}' --services '${env.IDLE_SERVICE}' --query 'services[0].taskDefinition' --output text
             """,
             returnStdout: true
         ).trim()
 
         def taskDef = sh(
             script: """
-            aws ecs describe-task-definition --task-definition ${taskDefArn} --query 'taskDefinition' --output json
+            aws ecs describe-task-definition --task-definition '${taskDefArn}' --query 'taskDefinition' --output json
             """,
             returnStdout: true
         ).trim()
 
         def taskDefJson = jsonSlurper.parseText(taskDef)
 
-        ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes', 'compatibilities', 
-         'registeredAt', 'registeredBy', 'deregisteredAt'].each { field ->
-            taskDefJson.remove(field)
+        // Remove fields that can't be included in register-task-definition input
+        [
+            'taskDefinitionArn', 'revision', 'status', 'requiresAttributes',
+            'compatibilities', 'registeredAt', 'registeredBy', 'deregisteredAt'
+        ].each { field ->
+            if (taskDefJson.containsKey(field)) {
+                taskDefJson.remove(field)
+            }
         }
 
-        taskDefJson.containerDefinitions[0].image = env.IMAGE_URI
+        if (taskDefJson.containerDefinitions && taskDefJson.containerDefinitions.size() > 0) {
+            taskDefJson.containerDefinitions[0].image = env.IMAGE_URI
+        } else {
+            error "No containerDefinitions found in task definition!"
+        }
 
-        writeFile file: 'new-task-def.json', text: groovy.json.JsonOutput.toJson(taskDefJson)
+        writeFile file: 'new-task-def.json', text: JsonOutput.prettyPrint(JsonOutput.toJson(taskDefJson))
 
         def newTaskDefArn = sh(
             script: """
@@ -341,9 +355,9 @@ def updateApplication(Map config) {
 
         sh """
         aws ecs update-service \\
-            --cluster ${env.ECS_CLUSTER} \\
-            --service ${env.IDLE_SERVICE} \\
-            --task-definition ${newTaskDefArn} \\
+            --cluster '${env.ECS_CLUSTER}' \\
+            --service '${env.IDLE_SERVICE}' \\
+            --task-definition '${newTaskDefArn}' \\
             --desired-count 1 \\
             --force-new-deployment
         """
@@ -352,7 +366,7 @@ def updateApplication(Map config) {
 
         echo "Waiting for ${env.IDLE_ENV} service to stabilize..."
         sh """
-        aws ecs wait services-stable --cluster ${env.ECS_CLUSTER} --services ${env.IDLE_SERVICE}
+        aws ecs wait services-stable --cluster '${env.ECS_CLUSTER}' --services '${env.IDLE_SERVICE}'
         """
 
         echo "✅ ${env.IDLE_ENV} service is stable"
@@ -361,6 +375,7 @@ def updateApplication(Map config) {
         error "Failed to update application: ${e.message}"
     }
 }
+
 
 def testEnvironment(Map config) {
     echo "Testing ${env.IDLE_ENV} environment..."
