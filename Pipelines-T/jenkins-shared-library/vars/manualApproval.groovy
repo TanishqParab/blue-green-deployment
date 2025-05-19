@@ -1,60 +1,64 @@
 // vars/manualApproval.groovy
 
-def call(Map config) {
-    def varFileOption = config.varFile ? "-var-file=${config.varFile}" : ""
-    
-    dir(config.tfWorkingDir) {
-        // Generate and save the full Terraform plan to a file
-        sh "terraform plan ${varFileOption} -no-color > tfplan.txt"
+def call(config) {
+    stage('Manual Approval') {
+        when {
+            expression { env.EXECUTION_TYPE == 'FULL_DEPLOY' || env.EXECUTION_TYPE == 'MANUAL_APPLY' }
+        }
+        steps {
+            script {
+                dir("${config.tfWorkingDir}") {
+                    def planCmd = 'terraform plan -no-color'
+                    if (config.varFile) {
+                        planCmd += " -var-file=${config.varFile}"
+                    }
+                    planCmd += " > tfplan.txt"
+                    sh planCmd
 
-        // Read the full plan for logging purposes
-        def tfPlan = readFile('tfplan.txt')
+                    def tfPlan = readFile('tfplan.txt')
+                    archiveArtifacts artifacts: 'tfplan.txt', fingerprint: true
 
-        // Archive the plan as an artifact for download
-        archiveArtifacts artifacts: 'tfplan.txt', fingerprint: true
+                    echo "========== Terraform Plan Start =========="
+                    echo tfPlan
+                    echo "========== Terraform Plan End ============"
 
-        // Log plan to console for visibility
-        echo "========== Terraform Plan Start =========="
-        echo tfPlan
-        echo "========== Terraform Plan End ============"
+                    def planDownloadLink = "${env.BUILD_URL}artifact/tfplan.txt"
 
-        // Construct artifact download link
-        def planDownloadLink = "${env.BUILD_URL}artifact/tfplan.txt"
+                    emailext (
+                        to: config.emailRecipient,
+                        subject: "Approval required for Terraform apply - Build ${currentBuild.number}",
+                        body: """
+                            Hi,
 
-        // Email for approval with download link
-        emailext (
-            to: config.emailRecipient,
-            subject: "Approval required for Terraform apply - Build ${currentBuild.number}",
-            body: """
-                Hi,
+                            A Terraform apply requires your approval.
 
-                A Terraform apply requires your approval.
+                            👉 Review the Terraform plan here:
+                            ${planDownloadLink}
 
-                👉 Review the Terraform plan here (download full plan):
-                ${planDownloadLink}
+                            Once reviewed, approve/abort at:
+                            ${env.BUILD_URL}input
 
-                Once reviewed, please approve or abort the deployment at:
-                ${env.BUILD_URL}input
+                            Regards,  
+                            Jenkins Automation
+                        """,
+                        replyTo: config.emailRecipient
+                    )
 
-                Regards,  
-                Jenkins Automation
-            """,
-            replyTo: config.emailRecipient
-        )
+                    timeout(time: 1, unit: 'HOURS') {
+                        input(
+                            id: 'ApplyApproval',
+                            message: "Terraform Apply Approval Required",
+                            ok: "Apply",
+                            parameters: [],
+                            description: """⚠️ Full plan too long.
 
-        // Input prompt for manual approval
-        timeout(time: 1, unit: 'HOURS') {
-            input(
-                id: 'ApplyApproval',
-                message: "Terraform Apply Approval Required",
-                ok: "Apply",
-                parameters: [],
-                description: """⚠️ Full plan is too long for this screen.
-
-✅ Check the full plan in:
+✅ Review full plan here:
 - [tfplan.txt Artifact](${planDownloadLink})
 - Console Output (above this stage)"""
-            )
+                        )
+                    }
+                }
+            }
         }
     }
 }
