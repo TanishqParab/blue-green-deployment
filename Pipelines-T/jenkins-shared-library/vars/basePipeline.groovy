@@ -57,10 +57,7 @@ def call(Map config) {
                 }
                 steps {
                     script {
-                        echo "Initializing Terraform..."
-                        dir("${config.tfWorkingDir}") {
-                            sh "terraform init"
-                        }
+                        terraformInit(config)
                     }
                 }
             }
@@ -71,44 +68,7 @@ def call(Map config) {
                 }
                 steps {
                     script {
-                        def tgExist = true
-                        def blueTG = ""
-                        def greenTG = ""
-
-                        try {
-                            blueTG = sh(
-                                script: "aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --region ${config.awsRegion} --output text",
-                                returnStdout: true
-                            ).trim()
-                            greenTG = sh(
-                                script: "aws elbv2 describe-target-groups --names green-tg --query 'TargetGroups[0].TargetGroupArn' --region ${config.awsRegion} --output text",
-                                returnStdout: true
-                            ).trim()
-                        } catch (Exception e) {
-                            echo "⚠️ Could not fetch TG ARNs. Assuming first build. Skipping TG vars in plan."
-                            tgExist = false
-                        }
-
-                        def planCommand = "terraform plan"
-                        if (config.varFile) {
-                            planCommand += " -var-file=${config.varFile}"
-                        }
-                        
-                        if (tgExist) {
-                            if (config.implementation == 'ecs') {
-                                planCommand += " -var='pipeline.blue_target_group_arn=${blueTG}' -var='pipeline.green_target_group_arn=${greenTG}'"
-                            } else {
-                                planCommand += " -var='blue_target_group_arn=${blueTG}' -var='green_target_group_arn=${greenTG}'"
-                            }
-                        }
-                        
-                        planCommand += " -out=tfplan"
-
-                        echo "Running Terraform Plan: ${planCommand}"
-                        dir("${config.tfWorkingDir}") {
-                            sh "${planCommand}"
-                            archiveArtifacts artifacts: 'tfplan', onlyIfSuccessful: true
-                        }
+                        terraformPlan(config)
                     }
                 }
             }
@@ -119,65 +79,7 @@ def call(Map config) {
                 }
                 steps {
                     script {
-                        dir("${config.tfWorkingDir}") {
-                            // Generate and save the full Terraform plan to a file
-                            def planCmd = 'terraform plan -no-color'
-                            if (config.varFile) {
-                                planCmd += " -var-file=${config.varFile}"
-                            }
-                            planCmd += " > tfplan.txt"
-                            sh planCmd
-                
-                            // Read the full plan for logging purposes
-                            def tfPlan = readFile('tfplan.txt')
-                
-                            // Archive the plan as an artifact for download
-                            archiveArtifacts artifacts: 'tfplan.txt', fingerprint: true
-                
-                            // Log plan to console for visibility
-                            echo "========== Terraform Plan Start =========="
-                            echo tfPlan
-                            echo "========== Terraform Plan End ============"
-                
-                            // Construct artifact download link
-                            def planDownloadLink = "${env.BUILD_URL}artifact/tfplan.txt"
-                
-                            // Email for approval with download link
-                            emailext (
-                                to: config.emailRecipient,
-                                subject: "Approval required for Terraform apply - Build ${currentBuild.number}",
-                                body: """
-                                    Hi,
-                
-                                    A Terraform apply requires your approval.
-                
-                                    👉 Review the Terraform plan here (download full plan):
-                                    ${planDownloadLink}
-                
-                                    Once reviewed, please approve or abort the deployment at:
-                                    ${env.BUILD_URL}input
-                
-                                    Regards,  
-                                    Jenkins Automation
-                                """,
-                                replyTo: config.emailRecipient
-                            )
-                
-                            // Input prompt for manual approval
-                            timeout(time: 1, unit: 'HOURS') {
-                                input(
-                                    id: 'ApplyApproval',
-                                    message: "Terraform Apply Approval Required",
-                                    ok: "Apply",
-                                    parameters: [],
-                                    description: """⚠️ Full plan is too long for this screen.
-                
-                ✅ Check the full plan in:
-                - [tfplan.txt Artifact](${planDownloadLink})
-                - Console Output (above this stage)"""
-                                )
-                            }
-                        }
+                        manualApproval(config)
                     }
                 }
             }
@@ -188,94 +90,10 @@ def call(Map config) {
                 }
                 steps {
                     script {
-                        echo "Running Terraform apply"
-                        dir("${config.tfWorkingDir}") {
-                            sh "terraform apply -auto-approve tfplan"
-                            
-                            // Save the state file
-                            archiveArtifacts artifacts: 'terraform.tfstate', fingerprint: true 
-                        }
-                        
-                        if (config.implementation == 'ec2') {
-                            // EC2-specific post-apply steps
-                            echo "Waiting for instances to start..."
-                            sleep(60)  // Give time for instances to fully boot
-
-                            echo "Checking instance states..."
-                            sh """
-                            aws ec2 describe-instances \\
-                            --filters "Name=tag:Environment,Values=Blue-Green" \\
-                            --query 'Reservations[*].Instances[*].[InstanceId, State.Name]' \\
-                            --output table
-                            """
-
-                            echo "Retrieving instance IPs..."
-                            def instances = sh(
-                                script: """
-                                aws ec2 describe-instances \\
-                                --filters "Name=tag:Environment,Values=Blue-Green" "Name=instance-state-name,Values=running" \\
-                                --query 'Reservations[*].Instances[*].PublicIpAddress' \\
-                                --output text
-                                """,
-                                returnStdout: true
-                            ).trim()
-
-                            if (!instances) {
-                                error "No running instances found! Check AWS console and tagging."
-                            }
-
-                            def instanceList = instances.split("\n")
-
-                            instanceList.each { instance ->
-                                echo "Deploying to instance: ${instance}"
-                                sshagent([config.sshKeyId]) {
-                                    sh """
-                                    echo "Copying app.py and setup script to ${instance}..."
-                                    scp -o StrictHostKeyChecking=no ${config.tfWorkingDir}/modules/ec2/scripts/${config.appFile} ec2-user@${instance}:/home/ec2-user/${config.appFile}
-                                    scp -o StrictHostKeyChecking=no ${config.tfWorkingDir}/modules/ec2/scripts/setup_flask_service.py ec2-user@${instance}:/home/ec2-user/setup_flask_service.py
-
-                                    echo "Running setup script on ${instance}..."
-                                    ssh ec2-user@${instance} 'chmod +x /home/ec2-user/setup_flask_service.py && sudo python3 /home/ec2-user/setup_flask_service.py'
-                                    """
-                                }
-                            }
-                        } else if (config.implementation == 'ecs') {
-                            // ECS-specific post-apply steps
-                            echo "Waiting for ECS services to stabilize..."
-                            sleep(60)  // Give time for services to start
-                            
-                            // Get the cluster name
-                            def cluster = sh(
-                                script: "terraform -chdir=${config.tfWorkingDir} output -raw ecs_cluster_id",
-                                returnStdout: true
-                            ).trim()
-                            
-                            // Check ECS service status
-                            sh """
-                            aws ecs describe-services --cluster ${cluster} --services blue-service --query 'services[0].{Status:status,DesiredCount:desiredCount,RunningCount:runningCount}' --output table
-                            """
-                            
-                            // Get the ALB DNS name
-                            def albDns = sh(
-                                script: "terraform -chdir=${config.tfWorkingDir} output -raw alb_dns_name",
-                                returnStdout: true
-                            ).trim()
-                            
-                            echo "Application is accessible at: http://${albDns}"
-                            
-                            // Test the application
-                            sh """
-                            # Wait for the application to be fully available
-                            sleep 30
-                            
-                            # Test the health endpoint
-                            curl -f http://${albDns}/health || echo "Health check failed but continuing"
-                            """
-                        }
+                        terraformApply(config)
                     }
                 }
             }
-
             
             stage('Register EC2 Instances to Target Groups') {
                 when {
@@ -355,25 +173,7 @@ def call(Map config) {
                 }
                 steps {
                     script {
-                        // Final approval URL (no inputId needed in URL)
-                        def destroyLink = "${env.BUILD_URL}input"
-                
-                        emailext (
-                            to: config.emailRecipient,
-                            subject: "🚨 Approval Required for Terraform Destroy - Build ${currentBuild.number}",
-                            body: """
-                            WARNING: You are about to destroy AWS infrastructure.
-                
-                            👉 Click the link below to approve destruction:
-                
-                            ${destroyLink}
-                            """,
-                            replyTo: config.emailRecipient
-                        )
-                
-                        timeout(time: 1, unit: 'HOURS') {
-                            input message: '⚠️ Confirm destruction of infrastructure?', ok: 'Destroy Now'
-                        }
+                        manualDestroyApproval(config)
                     }
                 }
             }
@@ -433,31 +233,7 @@ def call(Map config) {
                 }
                 steps {
                     script {
-                        // Get the build number containing the state
-                        def buildNumber = input(
-                            message: "Enter the build number that created the infrastructure (e.g., 42)",
-                            parameters: [string(name: 'BUILD_NUMBER')]
-                        )
-                
-                        // Fetch the archived state file
-                        dir("${config.tfWorkingDir}") {
-                            copyArtifacts(
-                                projectName: env.JOB_NAME,
-                                selector: specific("${buildNumber}"),
-                                filter: "terraform.tfstate",
-                                target: "."
-                            )
-                        }
-                
-                        // Initialize and destroy
-                        dir("${config.tfWorkingDir}") {
-                            sh "terraform init"
-                            def destroyCmd = "terraform destroy -auto-approve"
-                            if (config.varFile) {
-                                destroyCmd += " -var-file=${config.varFile}"
-                            }
-                            sh destroyCmd
-                        }
+                        terraformDestroy(config)
                     }
                 }
             }
