@@ -183,9 +183,23 @@ def call(Map config) {
                 steps {
                     script {
                         if (config.implementation == 'ec2') {
+                            // For EC2, just call switchTraffic with config as is
                             ec2Utils.switchTraffic(config)
                         } else if (config.implementation == 'ecs') {
-                            ecsUtils.switchTraffic(config)
+                            // For ECS, fetch resources first
+                            def resourceInfo = ecsUtils.fetchResources([
+                                tfWorkingDir: env.TF_WORKING_DIR
+                            ])
+            
+                            echo "🔄 Switching to ${resourceInfo.IDLE_ENV} with:"
+                            echo "🔹 LISTENER_ARN: ${resourceInfo.LISTENER_ARN}"
+                            echo "🔹 IDLE_TG_ARN : ${resourceInfo.IDLE_TG_ARN}"
+            
+                            ecsUtils.switchTraffic([
+                                LISTENER_ARN: resourceInfo.LISTENER_ARN,
+                                IDLE_TG_ARN : resourceInfo.IDLE_TG_ARN,
+                                IDLE_ENV    : resourceInfo.IDLE_ENV
+                            ])
                         }
                     }
                 }
