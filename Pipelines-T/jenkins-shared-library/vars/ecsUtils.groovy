@@ -269,6 +269,53 @@ def updateApplication(Map config) {
         def serviceNames = serviceArns.collect { it.tokenize('/').last() }
         echo "Discovered ECS services: ${serviceNames}"
 
+        def blueService = serviceNames.find { it.toLowerCase().contains("blue") }
+        def greenService = serviceNames.find { it.toLowerCase().contains("green") }
+
+        if (!blueService || !greenService) {
+            error "❌ Could not find both 'blue' and 'green' ECS services in cluster ${env.ECS_CLUSTER}. Found services: ${serviceNames}"
+        }
+
+        // === New Step: Dynamically determine ACTIVE_ENV by checking which service is currently serving 'latest' image ===
+        def getImageTagForService = { serviceName ->
+            def taskDefArn = sh(
+                script: "aws ecs describe-services --cluster ${env.ECS_CLUSTER} --services ${serviceName} --region ${env.AWS_REGION} --query 'services[0].taskDefinition' --output text",
+                returnStdout: true
+            ).trim()
+
+            def taskDefJsonText = sh(
+                script: "aws ecs describe-task-definition --task-definition ${taskDefArn} --region ${env.AWS_REGION} --query 'taskDefinition' --output json",
+                returnStdout: true
+            ).trim()
+
+            def taskDefJson = new JsonSlurper().parseText(taskDefJsonText)
+            def image = taskDefJson.containerDefinitions[0].image
+            // Image format: <ecr-uri>:<tag>
+            def imageTag = image.tokenize(':').last()
+            return imageTag
+        }
+
+        def blueImageTag = getImageTagForService(blueService)
+        def greenImageTag = getImageTagForService(greenService)
+
+        echo "Blue service image tag: ${blueImageTag}"
+        echo "Green service image tag: ${greenImageTag}"
+
+        // Assume ACTIVE_ENV is the one currently running the 'latest' tag (or your logic can be modified here)
+        if (blueImageTag == "latest" && greenImageTag != "latest") {
+            env.ACTIVE_ENV = "BLUE"
+        } else if (greenImageTag == "latest" && blueImageTag != "latest") {
+            env.ACTIVE_ENV = "GREEN"
+        } else {
+            // Fallback: pick the one with the higher image version number or default to BLUE
+            echo "⚠️ Could not determine ACTIVE_ENV from image tags clearly. Defaulting ACTIVE_ENV to BLUE"
+            env.ACTIVE_ENV = "BLUE"
+        }
+
+        // Continue your existing steps (rollback tagging, build & push, update ECS service, etc.)
+
+        // ... rest of your code unchanged ...
+
         // 🔽 Step 3: Validate ACTIVE_ENV and determine idle env/service
         if (!env.ACTIVE_ENV || !(env.ACTIVE_ENV.toUpperCase() in ["BLUE", "GREEN"])) {
             error "❌ ACTIVE_ENV must be set to 'BLUE' or 'GREEN'. Current value: '${env.ACTIVE_ENV}'"
@@ -277,13 +324,6 @@ def updateApplication(Map config) {
         env.IDLE_ENV = (env.ACTIVE_ENV == "BLUE") ? "GREEN" : "BLUE"
         echo "ACTIVE_ENV: ${env.ACTIVE_ENV}"
         echo "Determined IDLE_ENV: ${env.IDLE_ENV}"
-
-        def blueService = serviceNames.find { it.toLowerCase().contains("blue") }
-        def greenService = serviceNames.find { it.toLowerCase().contains("green") }
-
-        if (!blueService || !greenService) {
-            error "❌ Could not find both 'blue' and 'green' ECS services in cluster ${env.ECS_CLUSTER}. Found services: ${serviceNames}"
-        }
 
         env.IDLE_SERVICE = (env.IDLE_ENV == "BLUE") ? blueService : greenService
         echo "Selected IDLE_SERVICE: ${env.IDLE_SERVICE}"
@@ -407,6 +447,7 @@ def parseAndCleanTaskDef(String jsonText) {
 
     return taskDef
 }
+
 
 
 def testEnvironment(Map config) {
