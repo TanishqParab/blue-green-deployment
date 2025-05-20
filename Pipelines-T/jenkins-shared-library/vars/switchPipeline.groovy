@@ -131,12 +131,25 @@ def call(Map config) {
                         if (config.implementation == 'ec2') {
                             ec2Utils.updateApplication(config)
                         } else if (config.implementation == 'ecs') {
-                            // Run ECS application update logic (rollback tagging, image push, task update)
+                            // Run ECS update (tag rollback, push new image, update task def)
                             ecsUtils.updateApplication(config)
 
-                            // Export rollback tag and new image URI for downstream stages
-                            env.ROLLBACK_VERSION_TAG = env.PREVIOUS_VERSION_TAG ?: ""
-                            env.NEW_IMAGE_URI = env.IMAGE_URI ?: ""
+                            // Export rollback tag and new image URI to env for use in downstream steps
+                            if (env.PREVIOUS_VERSION_TAG) {
+                                echo "✅ Rollback version identified: ${env.PREVIOUS_VERSION_TAG}"
+                                env.ROLLBACK_VERSION_TAG = env.PREVIOUS_VERSION_TAG
+                            } else {
+                                echo "⚠️ No rollback version set"
+                                env.ROLLBACK_VERSION_TAG = ''
+                            }
+
+                            if (env.IMAGE_URI) {
+                                echo "✅ New image URI: ${env.IMAGE_URI}"
+                                env.NEW_IMAGE_URI = env.IMAGE_URI
+                            } else {
+                                echo "⚠️ No new image URI set"
+                                env.NEW_IMAGE_URI = ''
+                            }
                         } else {
                             error "Unsupported implementation type: ${config.implementation}"
                         }
@@ -183,11 +196,12 @@ def call(Map config) {
                 }
                 steps {
                     script {
-                        config.rollbackVersionTag = env.ROLLBACK_VERSION_TAG ?: ""
-                        config.newImageUri = env.NEW_IMAGE_URI ?: ""
+                        // Use image metadata exported from updateApplication step
+                        config.rollbackVersionTag = env.ROLLBACK_VERSION_TAG ?: ''
+                        config.newImageUri = env.NEW_IMAGE_URI ?: ''
 
-                        echo "Rollback Tag: ${config.rollbackVersionTag}"
-                        echo "New Image URI: ${config.newImageUri}"
+                        echo "🔁 Rollback Tag: ${config.rollbackVersionTag}"
+                        echo "🚀 New Image URI: ${config.newImageUri}"
 
                         approvals.switchTrafficApprovalECS(config)
                     }
