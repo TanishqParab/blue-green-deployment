@@ -204,6 +204,8 @@ def fetchResources(Map config) {
 }
 
 
+import groovy.json.JsonSlurper
+
 def ensureTargetGroupAssociation(Map config) {
     echo "Ensuring target group is associated with load balancer..."
 
@@ -221,12 +223,12 @@ def ensureTargetGroupAssociation(Map config) {
         returnStdout: true
     ).trim()
 
-    def targetGroupJson = readJSON text: targetGroupInfo
+    def jsonSlurper = new JsonSlurper()
+    def targetGroupJson = jsonSlurper.parseText(targetGroupInfo)
 
     if (targetGroupJson.size() == 0) {
         echo "⚠️ Target group ${config.IDLE_ENV} is not associated with a load balancer. Creating a path-based rule..."
 
-        // Find all priorities in use for this listener
         def rulesJson = sh(
             script: """
             aws elbv2 describe-rules --listener-arn ${config.LISTENER_ARN} --query 'Rules[*].Priority' --output json
@@ -234,13 +236,11 @@ def ensureTargetGroupAssociation(Map config) {
             returnStdout: true
         ).trim()
 
-        // Filter out 'default' and convert to integers
-        def priorities = (readJSON text: rulesJson)
+        def priorities = jsonSlurper.parseText(rulesJson)
             .findAll { it != 'default' }
             .collect { it as int }
             .sort()
 
-        // Find the lowest available priority >= 100
         int startPriority = 100
         int nextPriority = startPriority
         for (p in priorities) {
@@ -252,7 +252,6 @@ def ensureTargetGroupAssociation(Map config) {
         }
         echo "Using rule priority: ${nextPriority}"
 
-        // Try to create the rule with the available priority
         sh """
         aws elbv2 create-rule \
             --listener-arn ${config.LISTENER_ARN} \
