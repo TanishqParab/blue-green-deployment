@@ -131,12 +131,21 @@ def call(Map config) {
                         if (config.implementation == 'ec2') {
                             ec2Utils.updateApplication(config)
                         } else if (config.implementation == 'ecs') {
+                            // Run ECS update logic (discovers ECS cluster, builds image, updates idle service)
                             ecsUtils.updateApplication(config)
 
-                            // Set rollback tag and image URI from environment to config for downstream usage
+                            // Set important dynamic values from env for downstream stages
+                            config.ecsCluster = env.ECS_CLUSTER ?: ''
                             config.rollbackVersionTag = env.PREVIOUS_VERSION_TAG ?: ''
                             config.newImageUri = env.IMAGE_URI ?: ''
+                            config.activeEnv = env.ACTIVE_ENV ?: ''
+                            config.idleEnv = env.IDLE_ENV ?: ''
+                            config.idleService = env.IDLE_SERVICE ?: ''
 
+                            echo "✅ ECS Cluster: ${config.ecsCluster}"
+                            echo "✅ Active Environment: ${config.activeEnv}"
+                            echo "✅ Idle Environment: ${config.idleEnv}"
+                            echo "✅ Idle Service: ${config.idleService}"
                             echo "✅ Rollback version tag: ${config.rollbackVersionTag}"
                             echo "✅ New image URI: ${config.newImageUri}"
                         } else {
@@ -185,8 +194,13 @@ def call(Map config) {
                 }
                 steps {
                     script {
+                        echo "🟡 Awaiting manual approval before switching traffic..."
                         echo "🔁 Rollback Tag: ${config.rollbackVersionTag}"
                         echo "🚀 New Image URI: ${config.newImageUri}"
+                        echo "📦 ECS Cluster: ${config.ecsCluster}"
+                        echo "🔵 Active Env: ${config.activeEnv}"
+                        echo "🟢 Idle Env: ${config.idleEnv}"
+                        echo "⚙️ Idle Service: ${config.idleService}"
 
                         approvals.switchTrafficApprovalECS(config)
                     }
