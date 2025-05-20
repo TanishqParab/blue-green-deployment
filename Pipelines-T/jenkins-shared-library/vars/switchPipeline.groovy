@@ -121,8 +121,8 @@ def call(Map config) {
             
             stage('Update Application') {
                 when {
-                    expression { 
-                        (config.implementation == 'ec2' && env.EXECUTION_TYPE == 'APP_DEPLOY') || 
+                    expression {
+                        (config.implementation == 'ec2' && env.EXECUTION_TYPE == 'APP_DEPLOY') ||
                         (config.implementation == 'ecs' && env.DEPLOY_NEW_VERSION == 'true')
                     }
                 }
@@ -133,7 +133,7 @@ def call(Map config) {
                             ec2Utils.updateApplication(config)
                         } else if (config.implementation == 'ecs') {
                             echo "🔄 Updating application on ECS..."
-                            
+
                             // Run ECS update logic (discover ECS cluster, build & push image, update idle service)
                             ecsUtils.updateApplication(config)
 
