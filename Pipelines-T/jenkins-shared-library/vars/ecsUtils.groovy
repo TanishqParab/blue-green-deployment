@@ -353,7 +353,6 @@ def parseJson(String text) {
 }
 
 
-
 def testEnvironment(Map config) {
     echo "🔍 Testing ${env.IDLE_ENV} environment..."
 
