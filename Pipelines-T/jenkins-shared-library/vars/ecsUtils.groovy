@@ -250,13 +250,45 @@ def updateApplication(Map config) {
             error "❌ No ECS clusters found in region ${env.AWS_REGION}"
         }
 
-        def selectedClusterArn = clusterArns[0] // or apply filtering logic here
+        def selectedClusterArn = clusterArns[0]
         def selectedClusterName = selectedClusterArn.tokenize('/').last()
-
         env.ECS_CLUSTER = selectedClusterName
         echo "✅ Using ECS cluster: ${env.ECS_CLUSTER}"
 
-        // 🔽 Step 2: Get current 'latest' image details
+        // 🔽 Step 2: Dynamically discover ECS services
+        def servicesJson = sh(
+            script: "aws ecs list-services --cluster ${env.ECS_CLUSTER} --region ${env.AWS_REGION} --output json",
+            returnStdout: true
+        ).trim()
+
+        def serviceArns = new JsonSlurper().parseText(servicesJson)?.serviceArns
+        if (!serviceArns || serviceArns.isEmpty()) {
+            error "❌ No ECS services found in cluster ${env.ECS_CLUSTER}"
+        }
+
+        def serviceNames = serviceArns.collect { it.tokenize('/').last() }
+        echo "Discovered ECS services: ${serviceNames}"
+
+        // 🔽 Step 3: Validate ACTIVE_ENV and determine idle env/service
+        if (!env.ACTIVE_ENV || !(env.ACTIVE_ENV.toUpperCase() in ["BLUE", "GREEN"])) {
+            error "❌ ACTIVE_ENV must be set to 'BLUE' or 'GREEN'. Current value: '${env.ACTIVE_ENV}'"
+        }
+        env.ACTIVE_ENV = env.ACTIVE_ENV.toUpperCase()
+        env.IDLE_ENV = (env.ACTIVE_ENV == "BLUE") ? "GREEN" : "BLUE"
+        echo "ACTIVE_ENV: ${env.ACTIVE_ENV}"
+        echo "Determined IDLE_ENV: ${env.IDLE_ENV}"
+
+        def blueService = serviceNames.find { it.toLowerCase().contains("blue") }
+        def greenService = serviceNames.find { it.toLowerCase().contains("green") }
+
+        if (!blueService || !greenService) {
+            error "❌ Could not find both 'blue' and 'green' ECS services in cluster ${env.ECS_CLUSTER}. Found services: ${serviceNames}"
+        }
+
+        env.IDLE_SERVICE = (env.IDLE_ENV == "BLUE") ? blueService : greenService
+        echo "Selected IDLE_SERVICE: ${env.IDLE_SERVICE}"
+
+        // 🔽 Step 4: Get current 'latest' image digest
         def currentLatestImageInfo = sh(
             script: """
             aws ecr describe-images --repository-name ${env.ECR_REPO_NAME} --image-ids imageTag=latest --region ${env.AWS_REGION} --query 'imageDetails[0].{digest:imageDigest,pushedAt:imagePushedAt}' --output json 2>/dev/null || echo '{}'
@@ -266,7 +298,6 @@ def updateApplication(Map config) {
 
         def imageDigest = getJsonField(currentLatestImageInfo, 'digest')
 
-        // 🔽 Step 3: Backup 'latest' as rollback tag
         if (imageDigest) {
             def timestamp = new Date().format("yyyyMMdd-HHmmss")
             def rollbackTag = "rollback-${timestamp}"
@@ -285,7 +316,7 @@ def updateApplication(Map config) {
             echo "⚠️ No current 'latest' image found to tag"
         }
 
-        // 🔽 Step 4: Build and push Docker image
+        // 🔽 Step 5: Build and push Docker image
         def ecrUri = sh(
             script: "aws ecr describe-repositories --repository-names ${env.ECR_REPO_NAME} --region ${env.AWS_REGION} --query 'repositories[0].repositoryUri' --output text",
             returnStdout: true
@@ -293,14 +324,10 @@ def updateApplication(Map config) {
 
         sh """
         aws ecr get-login-password --region ${env.AWS_REGION} | docker login --username AWS --password-stdin ${ecrUri}
-
         cd ${env.TF_WORKING_DIR}/modules/ecs/scripts
-
         docker build -t ${env.ECR_REPO_NAME}:latest .
-
         docker tag ${env.ECR_REPO_NAME}:latest ${ecrUri}:latest
         docker tag ${env.ECR_REPO_NAME}:latest ${ecrUri}:v${currentBuild.number}
-
         docker push ${ecrUri}:latest
         docker push ${ecrUri}:v${currentBuild.number}
         """
@@ -312,6 +339,7 @@ def updateApplication(Map config) {
             echo "✅ Previous version preserved as: ${env.PREVIOUS_VERSION_TAG}"
         }
 
+        // 🔽 Step 6: Update ECS Service
         echo "Updating ${env.IDLE_ENV} service..."
 
         def taskDefArn = sh(
@@ -325,7 +353,6 @@ def updateApplication(Map config) {
         ).trim()
 
         def taskDefJson = parseAndCleanTaskDef(taskDefJsonText)
-
         taskDefJson.containerDefinitions[0].image = env.IMAGE_URI
 
         writeFile file: 'new-task-def.json', text: JsonOutput.prettyPrint(JsonOutput.toJson(taskDefJson))
