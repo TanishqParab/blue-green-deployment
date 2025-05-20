@@ -247,8 +247,7 @@ def updateApplication(Map config) {
             returnStdout: true
         ).trim()
 
-        def currentLatestJson = parseJson(currentLatestImageInfo)
-        def imageDigest = currentLatestJson?.digest?.toString()
+        def imageDigest = getJsonField(currentLatestImageInfo, 'digest')
 
         // Backup current 'latest' as rollback tag
         if (imageDigest) {
@@ -307,13 +306,7 @@ def updateApplication(Map config) {
             returnStdout: true
         ).trim()
 
-        def taskDefJson = parseJson(taskDefJsonText)
-
-        // Clean up non-required fields
-        ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes', 'compatibilities',
-         'registeredAt', 'registeredBy', 'deregisteredAt'].each { field ->
-            taskDefJson.remove(field)
-        }
+        def taskDefJson = parseAndCleanTaskDef(taskDefJsonText)
 
         taskDefJson.containerDefinitions[0].image = env.IMAGE_URI
 
@@ -350,6 +343,24 @@ def updateApplication(Map config) {
 @NonCPS
 def parseJson(String text) {
     return new JsonSlurper().parseText(text)
+}
+
+@NonCPS
+def getJsonField(String jsonText, String fieldName) {
+    def parsed = new JsonSlurper().parseText(jsonText)
+    return parsed?."${fieldName}"?.toString()
+}
+
+@NonCPS
+def parseAndCleanTaskDef(String jsonText) {
+    def taskDef = new JsonSlurper().parseText(jsonText)
+
+    ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes', 'compatibilities',
+     'registeredAt', 'registeredBy', 'deregisteredAt'].each { field ->
+        taskDef.remove(field)
+    }
+
+    return taskDef
 }
 
 
