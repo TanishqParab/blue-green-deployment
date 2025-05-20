@@ -628,23 +628,38 @@ def scaleDownOldEnvironment(Map config) {
     echo "📉 Dynamically scaling down old environment (previously live ECS service)..."
 
     try {
+        // 1. Dynamically fetch Load Balancer ARN by name (you can customize albName)
+        def albName = config.ALB_NAME ?: 'blue-green-alb' // Replace with your ALB name or pass via config
+
+        def albArn = sh(
+            script: """
+                aws elbv2 describe-load-balancers --names ${albName} --query 'LoadBalancers[0].LoadBalancerArn' --output text
+            """,
+            returnStdout: true
+        ).trim()
+
+        if (!albArn || albArn == 'None') {
+            error "❌ Could not find ALB ARN for name: ${albName}"
+        }
+        echo "✅ Found ALB ARN: ${albArn}"
+
+        // 2. Fetch Listener ARN(s) for the ALB, pick the first with forward action
         def listenerArn = sh(
             script: """
-                aws elbv2 describe-listeners --load-balancer-arn ${env.CUSTOM_ALB_ARN} \
-                --query "Listeners[?DefaultActions[0].Type=='forward'].[ListenerArn]" \
-                --output text
+                aws elbv2 describe-listeners --load-balancer-arn ${albArn} --query "Listeners[?DefaultActions[0].Type=='forward'].[ListenerArn]" --output text
             """,
             returnStdout: true
         ).trim()
 
         if (!listenerArn) {
-            error "❌ Listener ARN could not be determined from ALB ${env.CUSTOM_ALB_ARN}"
+            error "❌ Listener ARN could not be determined from ALB ${albArn}"
         }
+        echo "✅ Found Listener ARN: ${listenerArn}"
 
+        // 3. Fetch the live target group ARN from listener rules with Priority 1
         def liveTgArn = sh(
             script: """
-                aws elbv2 describe-rules --listener-arn ${listenerArn} \
-                --query "Rules[?Priority=='1'].Actions[0].TargetGroupArn" --output text
+                aws elbv2 describe-rules --listener-arn ${listenerArn} --query "Rules[?Priority=='1'].Actions[0].TargetGroupArn" --output text
             """,
             returnStdout: true
         ).trim()
@@ -652,19 +667,36 @@ def scaleDownOldEnvironment(Map config) {
         if (!liveTgArn) {
             error "❌ Live target group ARN could not be determined from listener rule"
         }
-
         echo "✅ Live Target Group ARN: ${liveTgArn}"
 
-        // Infer which is IDLE target group
-        def idleTgArn = (liveTgArn == env.BLUE_TG_ARN) ? env.GREEN_TG_ARN : env.BLUE_TG_ARN
+        // 4. Fetch all target groups for the ALB to identify blue and green (or idle) target groups
+        def targetGroupsJson = sh(
+            script: """
+                aws elbv2 describe-target-groups --load-balancer-arn ${albArn} --query 'TargetGroups[*].[TargetGroupArn, TargetGroupName]' --output json
+            """,
+            returnStdout: true
+        ).trim()
+
+        def targetGroups = parseJsonSafe(targetGroupsJson)
+
+        // Example logic to identify blue and green TG ARNs by name pattern
+        def blueTgArn = targetGroups.find { it[1].toLowerCase().contains('blue') }?.getAt(0)
+        def greenTgArn = targetGroups.find { it[1].toLowerCase().contains('green') }?.getAt(0)
+
+        if (!blueTgArn || !greenTgArn) {
+            error "❌ Could not find both Blue and Green target groups in ALB ${albArn}"
+        }
+        echo "✅ Blue TG ARN: ${blueTgArn}"
+        echo "✅ Green TG ARN: ${greenTgArn}"
+
+        // 5. Determine idle target group ARN (the one NOT currently live)
+        def idleTgArn = (liveTgArn == blueTgArn) ? greenTgArn : blueTgArn
         echo "✅ Idle (previously live) Target Group ARN: ${idleTgArn}"
 
-        // Get containerInstance target (usually IP:port)
+        // 6. Get one target's ID (IP or instance ID) from the idle target group
         def targetId = sh(
             script: """
-                aws elbv2 describe-target-health \
-                --target-group-arn ${idleTgArn} \
-                --query 'TargetHealthDescriptions[0].Target.Id' --output text
+                aws elbv2 describe-target-health --target-group-arn ${idleTgArn} --query 'TargetHealthDescriptions[0].Target.Id' --output text
             """,
             returnStdout: true
         ).trim()
@@ -674,7 +706,7 @@ def scaleDownOldEnvironment(Map config) {
             return
         }
 
-        // Find which ECS service is associated with this target
+        // 7. Find ECS cluster ARN (assumes single cluster)
         def ecsCluster = sh(
             script: "aws ecs list-clusters --query 'clusterArns[0]' --output text",
             returnStdout: true
@@ -684,6 +716,7 @@ def scaleDownOldEnvironment(Map config) {
             error "❌ No ECS cluster found"
         }
 
+        // 8. List ECS services in the cluster
         def services = sh(
             script: "aws ecs list-services --cluster ${ecsCluster} --output text",
             returnStdout: true
@@ -691,6 +724,7 @@ def scaleDownOldEnvironment(Map config) {
 
         def idleService = null
 
+        // 9. For each service, check if any task's ENI matches the target ID
         for (serviceArn in services) {
             def serviceName = serviceArn.tokenize('/').last()
             def taskArns = sh(
@@ -707,16 +741,14 @@ def scaleDownOldEnvironment(Map config) {
             def taskId = taskArns.split().first()
             def eni = sh(
                 script: """
-                    aws ecs describe-tasks --cluster ${ecsCluster} --tasks ${taskId} \
-                    --query "tasks[0].attachments[0].details[?name=='networkInterfaceId'].value" --output text
+                    aws ecs describe-tasks --cluster ${ecsCluster} --tasks ${taskId} --query "tasks[0].attachments[0].details[?name=='networkInterfaceId'].value" --output text
                 """,
                 returnStdout: true
             ).trim()
 
             def privateIp = sh(
                 script: """
-                    aws ec2 describe-network-interfaces --network-interface-ids ${eni} \
-                    --query 'NetworkInterfaces[0].PrivateIpAddress' --output text
+                    aws ec2 describe-network-interfaces --network-interface-ids ${eni} --query 'NetworkInterfaces[0].PrivateIpAddress' --output text
                 """,
                 returnStdout: true
             ).trim()
@@ -733,7 +765,7 @@ def scaleDownOldEnvironment(Map config) {
 
         echo "✅ Idle ECS service to scale down: ${idleService}"
 
-        // Scale down the idle (previously live) service
+        // 10. Scale down the idle ECS service
         sh """
             aws ecs update-service --cluster ${ecsCluster} --service ${idleService} --desired-count 0
         """
@@ -751,3 +783,9 @@ def scaleDownOldEnvironment(Map config) {
         echo "⚠️ Continuing pipeline despite error"
     }
 }
+
+@NonCPS
+def parseJsonSafe(String text) {
+    return new groovy.json.JsonSlurper().parseText(text)
+}
+
