@@ -442,49 +442,130 @@ def switchTraffic(Map config) {
 
 
 def scaleDownOldEnvironment(Map config) {
-    echo "Scaling down old environment..."
+    echo "📉 Dynamically scaling down old environment (previously live ECS service)..."
 
     try {
-        // Discover ECS cluster dynamically if not provided
-        def ecsCluster = config.ecsCluster ?: sh(
+        def listenerArn = sh(
+            script: """
+                aws elbv2 describe-listeners --load-balancer-arn ${env.CUSTOM_ALB_ARN} \
+                --query 'Listeners[?DefaultActions[0].Type==\\`forward\\`].[ListenerArn]' \
+                --output text
+            """,
+            returnStdout: true
+        ).trim()
+
+        if (!listenerArn) {
+            error "❌ Listener ARN could not be determined from ALB ${env.CUSTOM_ALB_ARN}"
+        }
+
+        def liveTgArn = sh(
+            script: """
+                aws elbv2 describe-rules --listener-arn ${listenerArn} \
+                --query 'Rules[?Priority==\\`1\\`].Actions[0].TargetGroupArn' --output text
+            """,
+            returnStdout: true
+        ).trim()
+
+        if (!liveTgArn) {
+            error "❌ Live target group ARN could not be determined from listener rule"
+        }
+
+        echo "✅ Live Target Group ARN: ${liveTgArn}"
+
+        // Infer which is IDLE target group
+        def idleTgArn = (liveTgArn == env.BLUE_TG_ARN) ? env.GREEN_TG_ARN : env.BLUE_TG_ARN
+        echo "✅ Idle (previously live) Target Group ARN: ${idleTgArn}"
+
+        // Get containerInstance target (usually IP:port)
+        def targetId = sh(
+            script: """
+                aws elbv2 describe-target-health \
+                --target-group-arn ${idleTgArn} \
+                --query 'TargetHealthDescriptions[0].Target.Id' --output text
+            """,
+            returnStdout: true
+        ).trim()
+
+        if (!targetId || targetId == "None") {
+            echo "⚠️ No targets found in the idle target group. Nothing to scale down."
+            return
+        }
+
+        // Find which ECS service is associated with this target
+        def ecsCluster = sh(
             script: "aws ecs list-clusters --query 'clusterArns[0]' --output text",
             returnStdout: true
         ).trim()
 
         if (!ecsCluster || ecsCluster == 'None') {
-            error "No ECS cluster found to scale down"
+            error "❌ No ECS cluster found"
         }
 
-        // Discover service dynamically if not provided
-        def liveService = config.liveService ?: sh(
-            script: "aws ecs list-services --cluster ${ecsCluster} --query 'serviceArns[0]' --output text",
+        def services = sh(
+            script: "aws ecs list-services --cluster ${ecsCluster} --output text",
             returnStdout: true
-        ).trim()
+        ).trim().split()
 
-        if (!liveService || liveService == 'None') {
-            error "No ECS service found to scale down in cluster ${ecsCluster}"
+        def idleService = null
+
+        for (serviceArn in services) {
+            def serviceName = serviceArn.tokenize('/').last()
+            def taskArns = sh(
+                script: """
+                    aws ecs list-tasks --cluster ${ecsCluster} --service-name ${serviceName} --output text
+                """,
+                returnStdout: true
+            ).trim()
+
+            if (!taskArns || taskArns == "None") {
+                continue
+            }
+
+            def taskId = taskArns.split().first()
+            def eni = sh(
+                script: """
+                    aws ecs describe-tasks --cluster ${ecsCluster} --tasks ${taskId} \
+                    --query 'tasks[0].attachments[0].details[?name==\\`networkInterfaceId\\`].value' --output text
+                """,
+                returnStdout: true
+            ).trim()
+
+            def privateIp = sh(
+                script: """
+                    aws ec2 describe-network-interfaces --network-interface-ids ${eni} \
+                    --query 'NetworkInterfaces[0].PrivateIpAddress' --output text
+                """,
+                returnStdout: true
+            ).trim()
+
+            if (privateIp == targetId) {
+                idleService = serviceName
+                break
+            }
         }
 
-        // Extract short service name from ARN if needed
-        if (liveService.contains('/')) {
-            liveService = liveService.tokenize('/').last()
+        if (!idleService) {
+            error "❌ Could not map target group to any ECS service. Scale-down aborted."
         }
 
-        echo "Scaling down service '${liveService}' in cluster '${ecsCluster}'..."
+        echo "✅ Idle ECS service to scale down: ${idleService}"
 
+        // Scale down the idle (previously live) service
         sh """
-        aws ecs update-service --cluster ${ecsCluster} --service ${liveService} --desired-count 0
+            aws ecs update-service --cluster ${ecsCluster} --service ${idleService} --desired-count 0
         """
 
-        echo "✅ Previous live service scaled down"
+        echo "✅ Successfully scaled down ${idleService}"
 
         sh """
-        aws ecs wait services-stable --cluster ${ecsCluster} --services ${liveService}
+            aws ecs wait services-stable --cluster ${ecsCluster} --services ${idleService}
         """
 
-        echo "✅ All services are stable"
+        echo "✅ Service is now stable"
+
     } catch (Exception e) {
-        echo "Warning: Scale down encountered an issue: ${e.message}"
-        echo "Continuing despite scale down issues"
+        echo "⚠️ Error during scale down: ${e.message}"
+        echo "⚠️ Continuing pipeline despite error"
     }
 }
+
