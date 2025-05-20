@@ -239,13 +239,13 @@ def updateApplication(Map config) {
     echo "Running ECS update application logic..."
 
     try {
-        // 🔽 Step 1: Dynamically discover ECS cluster
+        // Step 1: Dynamically discover ECS cluster
         def clustersJson = sh(
             script: "aws ecs list-clusters --region ${env.AWS_REGION} --output json",
             returnStdout: true
         ).trim()
 
-        def clusterArns = new JsonSlurper().parseText(clustersJson)?.clusterArns
+        def clusterArns = parseJsonSafe(clustersJson)?.clusterArns
         if (!clusterArns || clusterArns.isEmpty()) {
             error "❌ No ECS clusters found in region ${env.AWS_REGION}"
         }
@@ -255,13 +255,13 @@ def updateApplication(Map config) {
         env.ECS_CLUSTER = selectedClusterName
         echo "✅ Using ECS cluster: ${env.ECS_CLUSTER}"
 
-        // 🔽 Step 2: Dynamically discover ECS services
+        // Step 2: Dynamically discover ECS services
         def servicesJson = sh(
             script: "aws ecs list-services --cluster ${env.ECS_CLUSTER} --region ${env.AWS_REGION} --output json",
             returnStdout: true
         ).trim()
 
-        def serviceArns = new JsonSlurper().parseText(servicesJson)?.serviceArns
+        def serviceArns = parseJsonSafe(servicesJson)?.serviceArns
         if (!serviceArns || serviceArns.isEmpty()) {
             error "❌ No ECS services found in cluster ${env.ECS_CLUSTER}"
         }
@@ -276,7 +276,7 @@ def updateApplication(Map config) {
             error "❌ Could not find both 'blue' and 'green' ECS services in cluster ${env.ECS_CLUSTER}. Found services: ${serviceNames}"
         }
 
-        // === New Step: Dynamically determine ACTIVE_ENV by checking which service is currently serving 'latest' image ===
+        // Helper to get image tag for a service
         def getImageTagForService = { serviceName ->
             def taskDefArn = sh(
                 script: "aws ecs describe-services --cluster ${env.ECS_CLUSTER} --services ${serviceName} --region ${env.AWS_REGION} --query 'services[0].taskDefinition' --output text",
@@ -288,9 +288,8 @@ def updateApplication(Map config) {
                 returnStdout: true
             ).trim()
 
-            def taskDefJson = new JsonSlurper().parseText(taskDefJsonText)
+            def taskDefJson = parseJsonSafe(taskDefJsonText)
             def image = taskDefJson.containerDefinitions[0].image
-            // Image format: <ecr-uri>:<tag>
             def imageTag = image.tokenize(':').last()
             return imageTag
         }
@@ -301,22 +300,16 @@ def updateApplication(Map config) {
         echo "Blue service image tag: ${blueImageTag}"
         echo "Green service image tag: ${greenImageTag}"
 
-        // Assume ACTIVE_ENV is the one currently running the 'latest' tag (or your logic can be modified here)
         if (blueImageTag == "latest" && greenImageTag != "latest") {
             env.ACTIVE_ENV = "BLUE"
         } else if (greenImageTag == "latest" && blueImageTag != "latest") {
             env.ACTIVE_ENV = "GREEN"
         } else {
-            // Fallback: pick the one with the higher image version number or default to BLUE
             echo "⚠️ Could not determine ACTIVE_ENV from image tags clearly. Defaulting ACTIVE_ENV to BLUE"
             env.ACTIVE_ENV = "BLUE"
         }
 
-        // Continue your existing steps (rollback tagging, build & push, update ECS service, etc.)
-
-        // ... rest of your code unchanged ...
-
-        // 🔽 Step 3: Validate ACTIVE_ENV and determine idle env/service
+        // Validate ACTIVE_ENV and determine idle env/service
         if (!env.ACTIVE_ENV || !(env.ACTIVE_ENV.toUpperCase() in ["BLUE", "GREEN"])) {
             error "❌ ACTIVE_ENV must be set to 'BLUE' or 'GREEN'. Current value: '${env.ACTIVE_ENV}'"
         }
@@ -328,7 +321,7 @@ def updateApplication(Map config) {
         env.IDLE_SERVICE = (env.IDLE_ENV == "BLUE") ? blueService : greenService
         echo "Selected IDLE_SERVICE: ${env.IDLE_SERVICE}"
 
-        // 🔽 Step 4: Get current 'latest' image digest
+        // Step 4: Get current 'latest' image digest
         def currentLatestImageInfo = sh(
             script: """
             aws ecr describe-images --repository-name ${env.ECR_REPO_NAME} --image-ids imageTag=latest --region ${env.AWS_REGION} --query 'imageDetails[0].{digest:imageDigest,pushedAt:imagePushedAt}' --output json 2>/dev/null || echo '{}'
@@ -336,7 +329,7 @@ def updateApplication(Map config) {
             returnStdout: true
         ).trim()
 
-        def imageDigest = getJsonField(currentLatestImageInfo, 'digest')
+        def imageDigest = getJsonFieldSafe(currentLatestImageInfo, 'digest')
 
         if (imageDigest) {
             def timestamp = new Date().format("yyyyMMdd-HHmmss")
@@ -356,7 +349,7 @@ def updateApplication(Map config) {
             echo "⚠️ No current 'latest' image found to tag"
         }
 
-        // 🔽 Step 5: Build and push Docker image
+        // Step 5: Build and push Docker image
         def ecrUri = sh(
             script: "aws ecr describe-repositories --repository-names ${env.ECR_REPO_NAME} --region ${env.AWS_REGION} --query 'repositories[0].repositoryUri' --output text",
             returnStdout: true
@@ -379,7 +372,7 @@ def updateApplication(Map config) {
             echo "✅ Previous version preserved as: ${env.PREVIOUS_VERSION_TAG}"
         }
 
-        // 🔽 Step 6: Update ECS Service
+        // Step 6: Update ECS Service
         echo "Updating ${env.IDLE_ENV} service..."
 
         def taskDefArn = sh(
@@ -392,7 +385,7 @@ def updateApplication(Map config) {
             returnStdout: true
         ).trim()
 
-        def taskDefJson = parseAndCleanTaskDef(taskDefJsonText)
+        def taskDefJson = parseAndCleanTaskDefSafe(taskDefJsonText)
         taskDefJson.containerDefinitions[0].image = env.IMAGE_URI
 
         writeFile file: 'new-task-def.json', text: JsonOutput.prettyPrint(JsonOutput.toJson(taskDefJson))
@@ -426,18 +419,21 @@ def updateApplication(Map config) {
 }
 
 @NonCPS
-def parseJson(String text) {
-    return new JsonSlurper().parseText(text)
+def parseJsonSafe(String jsonText) {
+    def parsed = new JsonSlurper().parseText(jsonText)
+    def safeMap = [:]
+    safeMap.putAll(parsed)
+    return safeMap
 }
 
 @NonCPS
-def getJsonField(String jsonText, String fieldName) {
+def getJsonFieldSafe(String jsonText, String fieldName) {
     def parsed = new JsonSlurper().parseText(jsonText)
     return parsed?."${fieldName}"?.toString()
 }
 
 @NonCPS
-def parseAndCleanTaskDef(String jsonText) {
+def parseAndCleanTaskDefSafe(String jsonText) {
     def taskDef = new JsonSlurper().parseText(jsonText)
 
     ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes', 'compatibilities',
@@ -445,9 +441,10 @@ def parseAndCleanTaskDef(String jsonText) {
         taskDef.remove(field)
     }
 
-    return taskDef
+    def safeTaskDef = [:]
+    safeTaskDef.putAll(taskDef)
+    return safeTaskDef
 }
-
 
 
 def testEnvironment(Map config) {
