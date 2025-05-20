@@ -259,14 +259,18 @@ def call(Map config) {
                 steps {
                     script {
                         if (config.implementation == 'ec2') {
-                            // Call shared library method directly
+                            // Call shared library method with parameters
                             ec2Utils.tagSwapInstances([
                                 blueTag : 'Blue-Instance',
                                 greenTag: 'Green-Instance'
                             ])
                         } else if (config.implementation == 'ecs') {
-                            // Call with no parameters – it discovers ECS info internally
-                            ecsUtils.scaleDownOldEnvironment()
+                            // Call scaleDownOldEnvironment with config/env parameters
+                            ecsUtils.scaleDownOldEnvironment([
+                                CUSTOM_ALB_ARN: env.CUSTOM_ALB_ARN ?: config.CUSTOM_ALB_ARN,
+                                BLUE_TG_ARN   : env.BLUE_TG_ARN ?: config.BLUE_TG_ARN,
+                                GREEN_TG_ARN  : env.GREEN_TG_ARN ?: config.GREEN_TG_ARN
+                            ])
                         }
                     }
                 }
