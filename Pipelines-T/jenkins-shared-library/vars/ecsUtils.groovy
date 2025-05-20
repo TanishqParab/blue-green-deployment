@@ -232,14 +232,15 @@ def ensureTargetGroupAssociation(Map config) {
 }
 
 
-import groovy.json.JsonSlurperClassic
+import groovy.json.JsonSlurper
 import groovy.json.JsonOutput
 
 def updateApplication(Map config) {
     echo "Running ECS update application logic..."
 
     try {
-        def jsonSlurper = new JsonSlurperClassic()
+        // Use JsonSlurper instead of JsonSlurperClassic
+        def jsonSlurper = new JsonSlurper()
 
         // Get current 'latest' image details
         def currentLatestImageInfo = sh(
@@ -249,7 +250,7 @@ def updateApplication(Map config) {
             returnStdout: true
         ).trim()
 
-        def currentLatestJson = jsonSlurper.parseText(currentLatestImageInfo)
+        def currentLatestJson = parseJson(jsonSlurper, currentLatestImageInfo)
 
         // Backup current 'latest' as rollback tag
         if (currentLatestJson?.digest) {
@@ -270,13 +271,11 @@ def updateApplication(Map config) {
             echo "⚠️ No current 'latest' image found to tag"
         }
 
-        // Get ECR URI once
         def ecrUri = sh(
             script: "aws ecr describe-repositories --repository-names ${env.ECR_REPO_NAME} --region ${env.AWS_REGION} --query 'repositories[0].repositoryUri' --output text",
             returnStdout: true
         ).trim()
 
-        // Build and tag Docker image
         sh """
         aws ecr get-login-password --region ${env.AWS_REGION} | docker login --username AWS --password-stdin ${ecrUri}
 
@@ -298,7 +297,6 @@ def updateApplication(Map config) {
             echo "✅ Previous version preserved as: ${env.PREVIOUS_VERSION_TAG}"
         }
 
-        // Update Idle ECS service
         echo "Updating ${env.IDLE_ENV} service..."
 
         def taskDefArn = sh(
@@ -311,18 +309,16 @@ def updateApplication(Map config) {
             returnStdout: true
         ).trim()
 
-        def taskDefJson = jsonSlurper.parseText(taskDefJsonText)
+        def taskDefJson = parseJson(jsonSlurper, taskDefJsonText)
 
-        // Remove unnecessary fields
+        // Clean up non-required fields
         ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes', 'compatibilities',
          'registeredAt', 'registeredBy', 'deregisteredAt'].each { field ->
             taskDefJson.remove(field)
         }
 
-        // Update image
         taskDefJson.containerDefinitions[0].image = env.IMAGE_URI
 
-        // Save new task definition
         writeFile file: 'new-task-def.json', text: JsonOutput.prettyPrint(JsonOutput.toJson(taskDefJson))
 
         def newTaskDefArn = sh(
@@ -330,7 +326,6 @@ def updateApplication(Map config) {
             returnStdout: true
         ).trim()
 
-        // Update service with new task definition
         sh """
         aws ecs update-service \\
             --cluster ${env.ECS_CLUSTER} \\
@@ -343,7 +338,6 @@ def updateApplication(Map config) {
 
         echo "✅ Updated service ${env.IDLE_ENV} with task def: ${newTaskDefArn}"
 
-        // Wait for service to stabilize
         echo "Waiting for ${env.IDLE_ENV} service to stabilize..."
         sh "aws ecs wait services-stable --cluster ${env.ECS_CLUSTER} --services ${env.IDLE_SERVICE} --region ${env.AWS_REGION}"
         echo "✅ Service ${env.IDLE_ENV} is stable"
@@ -353,6 +347,11 @@ def updateApplication(Map config) {
         e.printStackTrace()
         error "Failed to update ECS application"
     }
+}
+
+@NonCPS
+def parseJson(jsonSlurper, text) {
+    return jsonSlurper.parseText(text)
 }
 
 
