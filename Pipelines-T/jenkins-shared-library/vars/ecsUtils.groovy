@@ -302,48 +302,107 @@ def updateApplication(Map config) {
 
 
 def testEnvironment(Map config) {
-    echo "Testing ${env.IDLE_ENV} environment..."
+    echo "🔍 Testing ${env.IDLE_ENV} environment..."
 
     try {
-        // Create a test path rule to route /test to the idle environment
-        sh """
-        # Check if a test rule already exists
-        TEST_RULE=\$(aws elbv2 describe-rules --listener-arn ${env.LISTENER_ARN} --query "Rules[?Priority=='10'].RuleArn" --output text)
+        // Dynamically fetch ALB ARN if not set
+        if (!env.ALB_ARN) {
+            echo "📡 Fetching ALB ARN..."
+            env.ALB_ARN = sh(
+                script: """
+                    aws elbv2 describe-load-balancers \
+                        --names ${config.albName} \
+                        --query 'LoadBalancers[0].LoadBalancerArn' \
+                        --output text
+                """,
+                returnStdout: true
+            ).trim()
+        }
 
-        # Delete the test rule if it exists
+        // Dynamically fetch Listener ARN if not set
+        if (!env.LISTENER_ARN) {
+            echo "🎧 Fetching Listener ARN..."
+            env.LISTENER_ARN = sh(
+                script: """
+                    aws elbv2 describe-listeners \
+                        --load-balancer-arn ${env.ALB_ARN} \
+                        --query 'Listeners[0].ListenerArn' \
+                        --output text
+                """,
+                returnStdout: true
+            ).trim()
+        }
+
+        // Delete existing test rule if it exists
+        echo "🧹 Cleaning up any existing test rule..."
+        sh """
+        TEST_RULE=\$(aws elbv2 describe-rules \
+            --listener-arn ${env.LISTENER_ARN} \
+            --query "Rules[?Priority=='10'].RuleArn" \
+            --output text)
+
         if [ ! -z "\$TEST_RULE" ]; then
             aws elbv2 delete-rule --rule-arn \$TEST_RULE
         fi
-
-        # Create a new test rule with wildcard pattern
-        aws elbv2 create-rule --listener-arn ${env.LISTENER_ARN} --priority 10 --conditions '[{"Field":"path-pattern","Values":["/test*"]}]' --actions '[{"Type":"forward","TargetGroupArn":"${env.IDLE_TG_ARN}"}]'
         """
 
-        // Get the ALB DNS name
+        // Create new test rule
+        echo "🚧 Creating test rule for /test* on idle target group..."
+        sh """
+        aws elbv2 create-rule \
+            --listener-arn ${env.LISTENER_ARN} \
+            --priority 10 \
+            --conditions '[{"Field":"path-pattern","Values":["/test*"]}]' \
+            --actions '[{"Type":"forward","TargetGroupArn":"${env.IDLE_TG_ARN}"}]'
+        """
+
+        // Get ALB DNS
         def albDns = sh(
-            script: "aws elbv2 describe-load-balancers --load-balancer-arns ${env.ALB_ARN} --query 'LoadBalancers[0].DNSName' --output text",
+            script: """
+                aws elbv2 describe-load-balancers \
+                    --load-balancer-arns ${env.ALB_ARN} \
+                    --query 'LoadBalancers[0].DNSName' \
+                    --output text
+            """,
             returnStdout: true
         ).trim()
 
-        // Test the idle environment
-        sh """
-        # Wait for the rule to take effect
-        sleep 10
+        // Store DNS for later use
+        env.ALB_DNS = albDns
 
-        # Test the health endpoint with multiple fallbacks
-        curl -f http://${albDns}/test/health || curl -f http://${albDns}/test || echo "Health check failed but continuing"
+        // Wait for rule propagation and test endpoint
+        echo "⏳ Waiting for rule to propagate..."
+        sh "sleep 10"
+
+        echo "🌐 Hitting test endpoint: http://${albDns}/test/health"
+        sh """
+        curl -f http://${albDns}/test/health || curl -f http://${albDns}/test || echo "⚠️ Health check failed but continuing"
         """
 
         echo "✅ ${env.IDLE_ENV} environment tested successfully"
 
-        // Store the ALB DNS for later use
-        env.ALB_DNS = albDns
-
     } catch (Exception e) {
-        echo "Warning: Test stage encountered an issue: ${e.message}"
-        echo "Continuing with deployment despite test issues"
+        echo "⚠️ Warning: Test stage encountered an issue: ${e.message}"
+        echo "Proceeding with deployment despite test issues."
+    } finally {
+        // Cleanup test rule after testing
+        echo "🧽 Cleaning up test rule..."
+        sh """
+        TEST_RULE=\$(aws elbv2 describe-rules \
+            --listener-arn ${env.LISTENER_ARN} \
+            --query "Rules[?Priority=='10'].RuleArn" \
+            --output text)
+
+        if [ ! -z "\$TEST_RULE" ]; then
+            aws elbv2 delete-rule --rule-arn \$TEST_RULE
+            echo "🗑️ Test rule deleted."
+        else
+            echo "ℹ️ No test rule found to delete."
+        fi
+        """
     }
 }
+
 
 
 def switchTraffic(Map config) {
