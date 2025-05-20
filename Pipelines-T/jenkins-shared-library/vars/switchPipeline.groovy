@@ -129,27 +129,34 @@ def call(Map config) {
                 steps {
                     script {
                         if (config.implementation == 'ec2') {
+                            echo "🔄 Updating application on EC2..."
                             ec2Utils.updateApplication(config)
                         } else if (config.implementation == 'ecs') {
-                            // Run ECS update logic (discovers ECS cluster, builds image, updates idle service)
+                            echo "🔄 Updating application on ECS..."
+                            
+                            // Run ECS update logic (discover ECS cluster, build & push image, update idle service)
                             ecsUtils.updateApplication(config)
 
-                            // Set important dynamic values from env for downstream stages
-                            config.ecsCluster = env.ECS_CLUSTER ?: ''
+                            // Dynamically set config values from environment
+                            config.ecsCluster        = env.ECS_CLUSTER ?: ''
                             config.rollbackVersionTag = env.PREVIOUS_VERSION_TAG ?: ''
-                            config.newImageUri = env.IMAGE_URI ?: ''
-                            config.activeEnv = env.ACTIVE_ENV ?: ''
-                            config.idleEnv = env.IDLE_ENV ?: ''
-                            config.idleService = env.IDLE_SERVICE ?: ''
+                            config.newImageUri       = env.IMAGE_URI ?: ''
+                            config.activeEnv         = env.ACTIVE_ENV ?: ''
+                            config.idleEnv           = env.IDLE_ENV ?: ''
+                            config.idleService       = env.IDLE_SERVICE ?: ''
 
-                            echo "✅ ECS Cluster: ${config.ecsCluster}"
-                            echo "✅ Active Environment: ${config.activeEnv}"
-                            echo "✅ Idle Environment: ${config.idleEnv}"
-                            echo "✅ Idle Service: ${config.idleService}"
-                            echo "✅ Rollback version tag: ${config.rollbackVersionTag}"
-                            echo "✅ New image URI: ${config.newImageUri}"
+                            echo """
+                            ✅ ECS Application Update Summary:
+                            ----------------------------------
+                            🧱 ECS Cluster        : ${config.ecsCluster}
+                            🔵 Active Environment : ${config.activeEnv}
+                            🟢 Idle Environment   : ${config.idleEnv}
+                            ⚙️  Idle Service       : ${config.idleService}
+                            🔁 Rollback Version   : ${config.rollbackVersionTag}
+                            🚀 New Image URI      : ${config.newImageUri}
+                            """
                         } else {
-                            error "Unsupported implementation type: ${config.implementation}"
+                            error "❌ Unsupported implementation type: ${config.implementation}"
                         }
                     }
                 }
@@ -194,13 +201,16 @@ def call(Map config) {
                 }
                 steps {
                     script {
-                        echo "🟡 Awaiting manual approval before switching traffic..."
-                        echo "🔁 Rollback Tag: ${config.rollbackVersionTag}"
-                        echo "🚀 New Image URI: ${config.newImageUri}"
-                        echo "📦 ECS Cluster: ${config.ecsCluster}"
-                        echo "🔵 Active Env: ${config.activeEnv}"
-                        echo "🟢 Idle Env: ${config.idleEnv}"
-                        echo "⚙️ Idle Service: ${config.idleService}"
+                        echo """
+                        🟡 Awaiting Manual Approval to Switch Traffic in ECS
+                        ------------------------------------------------------
+                        🔁 Rollback Version Tag : ${config.rollbackVersionTag}
+                        🚀 New Image URI        : ${config.newImageUri}
+                        📦 ECS Cluster          : ${config.ecsCluster}
+                        🔵 Active Environment   : ${config.activeEnv}
+                        🟢 Idle Environment     : ${config.idleEnv}
+                        ⚙️  Idle Service         : ${config.idleService}
+                        """
 
                         approvals.switchTrafficApprovalECS(config)
                     }
