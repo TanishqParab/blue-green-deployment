@@ -247,19 +247,19 @@ def updateApplication(Map config) {
             returnStdout: true
         ).trim()
 
-        // Parse JSON inline (no passing JsonSlurper around)
         def currentLatestJson = parseJson(currentLatestImageInfo)
+        def imageDigest = currentLatestJson?.digest?.toString()
 
         // Backup current 'latest' as rollback tag
-        if (currentLatestJson?.digest) {
+        if (imageDigest) {
             def timestamp = new Date().format("yyyyMMdd-HHmmss")
             def rollbackTag = "rollback-${timestamp}"
 
-            echo "Found current 'latest' image with digest: ${currentLatestJson.digest}"
+            echo "Found current 'latest' image with digest: ${imageDigest}"
             echo "Tagging current 'latest' image as '${rollbackTag}'..."
 
             sh """
-            aws ecr batch-get-image --repository-name ${env.ECR_REPO_NAME} --region ${env.AWS_REGION} --image-ids imageDigest=${currentLatestJson.digest} --query 'images[0].imageManifest' --output text > image-manifest.json
+            aws ecr batch-get-image --repository-name ${env.ECR_REPO_NAME} --region ${env.AWS_REGION} --image-ids imageDigest=${imageDigest} --query 'images[0].imageManifest' --output text > image-manifest.json
             aws ecr put-image --repository-name ${env.ECR_REPO_NAME} --region ${env.AWS_REGION} --image-tag ${rollbackTag} --image-manifest file://image-manifest.json
             """
 
@@ -351,6 +351,7 @@ def updateApplication(Map config) {
 def parseJson(String text) {
     return new JsonSlurper().parseText(text)
 }
+
 
 
 def testEnvironment(Map config) {
