@@ -265,11 +265,9 @@ def call(Map config) {
                                 greenTag: 'Green-Instance'
                             ])
                         } else if (config.implementation == 'ecs') {
-                            // Call scaleDownOldEnvironment with config/env parameters
+                            // Pass ALB name or other minimal config needed by scaleDownOldEnvironment
                             ecsUtils.scaleDownOldEnvironment([
-                                CUSTOM_ALB_ARN: env.CUSTOM_ALB_ARN ?: config.CUSTOM_ALB_ARN,
-                                BLUE_TG_ARN   : env.BLUE_TG_ARN ?: config.BLUE_TG_ARN,
-                                GREEN_TG_ARN  : env.GREEN_TG_ARN ?: config.GREEN_TG_ARN
+                                ALB_NAME: config.ALB_NAME ?: 'blue-green-alb'  // Replace or set in config
                             ])
                         }
                     }
