@@ -131,7 +131,13 @@ def call(Map config) {
                         if (config.implementation == 'ec2') {
                             ec2Utils.updateApplication(config)
                         } else if (config.implementation == 'ecs') {
+                            // Run ECS application update logic including tagging rollback, pushing new image,
+                            // updating task definition and idle service, and setting PREVIOUS_VERSION_TAG + IMAGE_URI
                             ecsUtils.updateApplication(config)
+
+                            // Store rollback tag and image URI for downstream rollback steps
+                            env.ROLLBACK_VERSION_TAG = env.PREVIOUS_VERSION_TAG ?: ""
+                            env.NEW_IMAGE_URI = env.IMAGE_URI ?: ""
                         } else {
                             error "Unsupported implementation type: ${config.implementation}"
                         }
