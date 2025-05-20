@@ -145,10 +145,17 @@ def call(Map config) {
                 }
                 steps {
                     script {
-                        ec2Utils.deployToBlueInstance(config)
+                        // Prepare the config parameters needed by deployToBlueInstance
+                        def deployConfig = [
+                            albName: config.albName ?: 'blue-green-alb',                // Replace with your actual ALB name or use config variable
+                            blueTargetGroupName: config.blueTargetGroupName ?: 'blue-tg', // Replace with your actual Blue TG name or config variable
+                            blueTag: config.blueTag ?: 'Blue-Instance'              // Replace with your actual EC2 tag for Blue instance
+                        ]
+                        ec2Utils.deployToBlueInstance(deployConfig)
                     }
                 }
             }
+
 
             
             stage('Test Environment') {
