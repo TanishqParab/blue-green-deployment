@@ -239,9 +239,6 @@ def updateApplication(Map config) {
     echo "Running ECS update application logic..."
 
     try {
-        // Use JsonSlurper instead of JsonSlurperClassic
-        def jsonSlurper = new JsonSlurper()
-
         // Get current 'latest' image details
         def currentLatestImageInfo = sh(
             script: """
@@ -250,7 +247,8 @@ def updateApplication(Map config) {
             returnStdout: true
         ).trim()
 
-        def currentLatestJson = parseJson(jsonSlurper, currentLatestImageInfo)
+        // Parse JSON inline (no passing JsonSlurper around)
+        def currentLatestJson = parseJson(currentLatestImageInfo)
 
         // Backup current 'latest' as rollback tag
         if (currentLatestJson?.digest) {
@@ -309,7 +307,7 @@ def updateApplication(Map config) {
             returnStdout: true
         ).trim()
 
-        def taskDefJson = parseJson(jsonSlurper, taskDefJsonText)
+        def taskDefJson = parseJson(taskDefJsonText)
 
         // Clean up non-required fields
         ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes', 'compatibilities',
@@ -350,8 +348,8 @@ def updateApplication(Map config) {
 }
 
 @NonCPS
-def parseJson(jsonSlurper, text) {
-    return jsonSlurper.parseText(text)
+def parseJson(String text) {
+    return new JsonSlurper().parseText(text)
 }
 
 
