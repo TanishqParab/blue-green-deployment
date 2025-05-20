@@ -131,11 +131,10 @@ def call(Map config) {
                         if (config.implementation == 'ec2') {
                             ec2Utils.updateApplication(config)
                         } else if (config.implementation == 'ecs') {
-                            // Run ECS application update logic including tagging rollback, pushing new image,
-                            // updating task definition and idle service, and setting PREVIOUS_VERSION_TAG + IMAGE_URI
+                            // Run ECS application update logic (rollback tagging, image push, task update)
                             ecsUtils.updateApplication(config)
 
-                            // Store rollback tag and image URI for downstream rollback steps
+                            // Export rollback tag and new image URI for downstream stages
                             env.ROLLBACK_VERSION_TAG = env.PREVIOUS_VERSION_TAG ?: ""
                             env.NEW_IMAGE_URI = env.IMAGE_URI ?: ""
                         } else {
@@ -178,15 +177,19 @@ def call(Map config) {
             }
             
             stage('Manual Approval Before Switch Traffic ECS') {
-                when { expression { config.implementation == 'ecs' && env.DEPLOY_NEW_VERSION == 'true' } }
+                when { 
+                    expression { config.implementation == 'ecs' && env.DEPLOY_NEW_VERSION == 'true' } 
+                }
                 steps {
                     script {
+                        // Optionally, pass rollback and new image info to approval step if needed
+                        config.rollbackVersionTag = env.ROLLBACK_VERSION_TAG ?: ""
+                        config.newImageUri = env.NEW_IMAGE_URI ?: ""
+
                         approvals.switchTrafficApprovalECS(config)
                     }
                 }
             }
-
-
 
             
             stage('Switch Traffic') {
