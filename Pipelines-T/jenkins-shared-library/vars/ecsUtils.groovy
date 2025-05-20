@@ -239,7 +239,24 @@ def updateApplication(Map config) {
     echo "Running ECS update application logic..."
 
     try {
-        // Get current 'latest' image details
+        // 🔽 Step 1: Dynamically discover ECS cluster
+        def clustersJson = sh(
+            script: "aws ecs list-clusters --region ${env.AWS_REGION} --output json",
+            returnStdout: true
+        ).trim()
+
+        def clusterArns = new JsonSlurper().parseText(clustersJson)?.clusterArns
+        if (!clusterArns || clusterArns.isEmpty()) {
+            error "❌ No ECS clusters found in region ${env.AWS_REGION}"
+        }
+
+        def selectedClusterArn = clusterArns[0] // or apply filtering logic here
+        def selectedClusterName = selectedClusterArn.tokenize('/').last()
+
+        env.ECS_CLUSTER = selectedClusterName
+        echo "✅ Using ECS cluster: ${env.ECS_CLUSTER}"
+
+        // 🔽 Step 2: Get current 'latest' image details
         def currentLatestImageInfo = sh(
             script: """
             aws ecr describe-images --repository-name ${env.ECR_REPO_NAME} --image-ids imageTag=latest --region ${env.AWS_REGION} --query 'imageDetails[0].{digest:imageDigest,pushedAt:imagePushedAt}' --output json 2>/dev/null || echo '{}'
@@ -249,7 +266,7 @@ def updateApplication(Map config) {
 
         def imageDigest = getJsonField(currentLatestImageInfo, 'digest')
 
-        // Backup current 'latest' as rollback tag
+        // 🔽 Step 3: Backup 'latest' as rollback tag
         if (imageDigest) {
             def timestamp = new Date().format("yyyyMMdd-HHmmss")
             def rollbackTag = "rollback-${timestamp}"
@@ -268,6 +285,7 @@ def updateApplication(Map config) {
             echo "⚠️ No current 'latest' image found to tag"
         }
 
+        // 🔽 Step 4: Build and push Docker image
         def ecrUri = sh(
             script: "aws ecr describe-repositories --repository-names ${env.ECR_REPO_NAME} --region ${env.AWS_REGION} --query 'repositories[0].repositoryUri' --output text",
             returnStdout: true
