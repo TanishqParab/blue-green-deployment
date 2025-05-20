@@ -313,26 +313,36 @@ def tagSwapInstances(Map config) {
     if (!blueInstance || !greenInstance) {
         error "❌ Could not find both Blue and Green running instances. Found:\n${instancesJson}"
     }
-    echo "✔️ Found instances - Blue: ${blueInstance}, Green: ${greenInstance}"
 
+    echo "✔️ Found instances - Blue: ${blueInstance}, Green: ${greenInstance}"
     echo "🔄 Performing atomic tag swap..."
 
     sh """
         #!/bin/bash
         set -euo pipefail
 
-        if [ -z "${blueInstance}" ] || [ -z "${greenInstance}" ]; then
-            echo "❌ Missing instance IDs"
-            exit 1
-        fi
+        BLUE_INSTANCE="${blueInstance}"
+        GREEN_INSTANCE="${greenInstance}"
+        BLUE_TAG="${config.blueTag}"
+        GREEN_TAG="${config.greenTag}"
 
-        aws ec2 create-tags --resources ${blueInstance} --tags Key=Name,Value=${config.greenTag}
-        aws ec2 create-tags --resources ${greenInstance} --tags Key=Name,Value=${config.blueTag}
+        echo "➡️ Swapping tags:"
+        echo "- \$BLUE_INSTANCE will become \$GREEN_TAG"
+        echo "- \$GREEN_INSTANCE will become \$BLUE_TAG"
 
-        blue_tag=\$(aws ec2 describe-tags --filters "Name=resource-id,Values=${blueInstance}" "Name=key,Values=Name" --query "Tags[0].Value" --output text)
-        green_tag=\$(aws ec2 describe-tags --filters "Name=resource-id,Values=${greenInstance}" "Name=key,Values=Name" --query "Tags[0].Value" --output text)
+        # Swap the Name tags
+        aws ec2 create-tags --resources "\$BLUE_INSTANCE" --tags Key=Name,Value="\$GREEN_TAG"
+        aws ec2 create-tags --resources "\$GREEN_INSTANCE" --tags Key=Name,Value="\$BLUE_TAG"
 
-        if [ "\$blue_tag" != "${config.greenTag}" ] || [ "\$green_tag" != "${config.blueTag}" ]; then
+        # Verify the tag swap
+        new_blue_tag=\$(aws ec2 describe-tags --filters "Name=resource-id,Values=\$BLUE_INSTANCE" "Name=key,Values=Name" --query "Tags[0].Value" --output text)
+        new_green_tag=\$(aws ec2 describe-tags --filters "Name=resource-id,Values=\$GREEN_INSTANCE" "Name=key,Values=Name" --query "Tags[0].Value" --output text)
+
+        echo "🧪 Verifying tag swap:"
+        echo "- \$BLUE_INSTANCE: \$new_blue_tag"
+        echo "- \$GREEN_INSTANCE: \$new_green_tag"
+
+        if [[ "\$new_blue_tag" != "\$GREEN_TAG" || "\$new_green_tag" != "\$BLUE_TAG" ]]; then
             echo "❌ Tag verification failed!"
             exit 1
         fi
@@ -341,6 +351,6 @@ def tagSwapInstances(Map config) {
     echo "✅ Deployment Complete!"
     echo "====================="
     echo "Instance Tags:"
-    echo "- ${blueInstance} (now ${config.greenTag})"
-    echo "- ${greenInstance} (now ${config.blueTag})"
+    echo "- ${blueInstance} is now '${config.greenTag}'"
+    echo "- ${greenInstance} is now '${config.blueTag}'"
 }
