@@ -143,6 +143,7 @@ def call(Map config) {
                     }
                 }
             }
+            
 
             stage('Deploy to Blue EC2 Instance') {
                 when {
@@ -182,9 +183,11 @@ def call(Map config) {
                 }
                 steps {
                     script {
-                        // Optionally, pass rollback and new image info to approval step if needed
                         config.rollbackVersionTag = env.ROLLBACK_VERSION_TAG ?: ""
                         config.newImageUri = env.NEW_IMAGE_URI ?: ""
+
+                        echo "Rollback Tag: ${config.rollbackVersionTag}"
+                        echo "New Image URI: ${config.newImageUri}"
 
                         approvals.switchTrafficApprovalECS(config)
                     }
