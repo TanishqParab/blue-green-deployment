@@ -294,7 +294,7 @@ def tagSwapInstances(Map config) {
         aws ec2 describe-instances \
             --filters "Name=tag:Name,Values=${config.blueTag},${config.greenTag}" \
                     "Name=instance-state-name,Values=running" \
-            --query 'Reservations[].Instances[].[InstanceId,Tags[?Key==\`Name\`].Value | [0]]' \
+            --query "Reservations[].Instances[].[InstanceId,Tags[?Key=='Name'].Value | [0]]" \
             --output json
     """, returnStdout: true).trim()
 
