@@ -159,10 +159,42 @@ def updateApplication(Map config) {
 }
 
 def deployToBlueInstance(Map config) {
-    // Get Blue Instance IP
+    // 1. Dynamically get ALB ARN by ALB name (or partial match)
+    def albArn = sh(
+        script: """
+        aws elbv2 describe-load-balancers \\
+            --names "${config.albName}" \\
+            --query 'LoadBalancers[0].LoadBalancerArn' \\
+            --output text
+        """,
+        returnStdout: true
+    ).trim()
+
+    if (!albArn || albArn == 'None') {
+        error "❌ Could not find ALB ARN with name '${config.albName}'"
+    }
+    echo "✅ Found ALB ARN: ${albArn}"
+
+    // 2. Dynamically get Blue Target Group ARN filtered by ALB ARN and TG name/tag
+    def blueTGArn = sh(
+        script: """
+        aws elbv2 describe-target-groups \\
+            --load-balancer-arn ${albArn} \\
+            --query 'TargetGroups[?contains(TargetGroupName, \`${config.blueTargetGroupName}\`)].TargetGroupArn | [0]' \\
+            --output text
+        """,
+        returnStdout: true
+    ).trim()
+
+    if (!blueTGArn || blueTGArn == 'None') {
+        error "❌ Could not find Blue Target Group ARN with name containing '${config.blueTargetGroupName}' under ALB '${config.albName}'"
+    }
+    echo "✅ Found Blue Target Group ARN: ${blueTGArn}"
+
+    // 3. Get Blue Instance IP
     def blueInstanceIP = sh(
         script: """
-        aws ec2 describe-instances --filters "Name=tag:Name,Values=Blue-Instance" "Name=instance-state-name,Values=running" \
+        aws ec2 describe-instances --filters "Name=tag:Name,Values=${config.blueTag}" "Name=instance-state-name,Values=running" \\
         --query 'Reservations[0].Instances[0].PublicIpAddress' --output text
         """,
         returnStdout: true
@@ -171,23 +203,21 @@ def deployToBlueInstance(Map config) {
     if (!blueInstanceIP) {
         error "❌ No running Blue instance found!"
     }
-
     echo "✅ Deploying to Blue instance: ${blueInstanceIP}"
 
-    // Copy App and Restart Service
+    // 4. Copy App and Restart Service
     sshagent([env.SSH_KEY_ID]) {
         sh "scp -o StrictHostKeyChecking=no ${env.TF_WORKING_DIR}/modules/ec2/scripts/${env.APP_FILE} ec2-user@${blueInstanceIP}:/home/ec2-user/${env.APP_FILE}"
         sh "ssh ec2-user@${blueInstanceIP} 'sudo systemctl restart flaskapp.service'"
     }
-
     env.BLUE_INSTANCE_IP = blueInstanceIP
 
-    // Health Check for Blue Instance
+    // 5. Health Check for Blue Instance
     echo "🔍 Monitoring health of Blue instance..."
 
     def blueInstanceId = sh(
         script: """
-        aws ec2 describe-instances --filters "Name=tag:Name,Values=Blue-Instance" "Name=instance-state-name,Values=running" \
+        aws ec2 describe-instances --filters "Name=tag:Name,Values=${config.blueTag}" "Name=instance-state-name,Values=running" \\
         --query 'Reservations[0].Instances[0].InstanceId' --output text
         """,
         returnStdout: true
@@ -201,10 +231,10 @@ def deployToBlueInstance(Map config) {
         sleep(10)
         healthStatus = sh(
             script: """
-            aws elbv2 describe-target-health \
-            --target-group-arn ${env.BLUE_TG_ARN} \
-            --targets Id=${blueInstanceId} \
-            --query 'TargetHealthDescriptions[0].TargetHealth.State' \
+            aws elbv2 describe-target-health \\
+            --target-group-arn ${blueTGArn} \\
+            --targets Id=${blueInstanceId} \\
+            --query 'TargetHealthDescriptions[0].TargetHealth.State' \\
             --output text
             """,
             returnStdout: true
