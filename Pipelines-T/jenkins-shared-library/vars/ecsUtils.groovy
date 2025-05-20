@@ -207,9 +207,16 @@ def fetchResources(Map config) {
 def ensureTargetGroupAssociation(Map config) {
     echo "Ensuring target group is associated with load balancer..."
 
+    if (!config.IDLE_TG_ARN || config.IDLE_TG_ARN.trim() == "") {
+        error "IDLE_TG_ARN is missing or empty"
+    }
+    if (!config.LISTENER_ARN || config.LISTENER_ARN.trim() == "") {
+        error "LISTENER_ARN is missing or empty"
+    }
+
     def targetGroupInfo = sh(
         script: """
-        aws elbv2 describe-target-groups --target-group-arns ${env.IDLE_TG_ARN} --query 'TargetGroups[0].LoadBalancerArns' --output json
+        aws elbv2 describe-target-groups --target-group-arns ${config.IDLE_TG_ARN} --query 'TargetGroups[0].LoadBalancerArns' --output json
         """,
         returnStdout: true
     ).trim()
@@ -217,15 +224,45 @@ def ensureTargetGroupAssociation(Map config) {
     def targetGroupJson = readJSON text: targetGroupInfo
 
     if (targetGroupJson.size() == 0) {
-        echo "⚠️ Target group ${env.IDLE_ENV} is not associated with a load balancer. Creating a path-based rule..."
+        echo "⚠️ Target group ${config.IDLE_ENV} is not associated with a load balancer. Creating a path-based rule..."
 
+        // Find all priorities in use for this listener
+        def rulesJson = sh(
+            script: """
+            aws elbv2 describe-rules --listener-arn ${config.LISTENER_ARN} --query 'Rules[*].Priority' --output json
+            """,
+            returnStdout: true
+        ).trim()
+
+        // Filter out 'default' and convert to integers
+        def priorities = (readJSON text: rulesJson)
+            .findAll { it != 'default' }
+            .collect { it as int }
+            .sort()
+
+        // Find the lowest available priority >= 100
+        int startPriority = 100
+        int nextPriority = startPriority
+        for (p in priorities) {
+            if (p == nextPriority) {
+                nextPriority++
+            } else if (p > nextPriority) {
+                break
+            }
+        }
+        echo "Using rule priority: ${nextPriority}"
+
+        // Try to create the rule with the available priority
         sh """
-        aws elbv2 create-rule --listener-arn ${env.LISTENER_ARN} --priority 100 --conditions '[{"Field":"path-pattern","Values":["/associate-tg*"]}]' --actions '[{"Type":"forward","TargetGroupArn":"${env.IDLE_TG_ARN}"}]'
+        aws elbv2 create-rule \
+            --listener-arn ${config.LISTENER_ARN} \
+            --priority ${nextPriority} \
+            --conditions '[{"Field":"path-pattern","Values":["/associate-tg*"]}]' \
+            --actions '[{"Type":"forward","TargetGroupArn":"${config.IDLE_TG_ARN}"}]'
         """
 
         sleep(10)
-
-        echo "✅ Target group associated with load balancer via path rule"
+        echo "✅ Target group associated with load balancer via path rule (priority ${nextPriority})"
     } else {
         echo "✅ Target group is already associated with load balancer"
     }
@@ -592,7 +629,7 @@ def scaleDownOldEnvironment(Map config) {
         def listenerArn = sh(
             script: """
                 aws elbv2 describe-listeners --load-balancer-arn ${env.CUSTOM_ALB_ARN} \
-                --query 'Listeners[?DefaultActions[0].Type==\\`forward\\`].[ListenerArn]' \
+                --query "Listeners[?DefaultActions[0].Type=='forward'].[ListenerArn]" \
                 --output text
             """,
             returnStdout: true
@@ -605,7 +642,7 @@ def scaleDownOldEnvironment(Map config) {
         def liveTgArn = sh(
             script: """
                 aws elbv2 describe-rules --listener-arn ${listenerArn} \
-                --query 'Rules[?Priority==\\`1\\`].Actions[0].TargetGroupArn' --output text
+                --query "Rules[?Priority=='1'].Actions[0].TargetGroupArn" --output text
             """,
             returnStdout: true
         ).trim()
@@ -669,7 +706,7 @@ def scaleDownOldEnvironment(Map config) {
             def eni = sh(
                 script: """
                     aws ecs describe-tasks --cluster ${ecsCluster} --tasks ${taskId} \
-                    --query 'tasks[0].attachments[0].details[?name==\\`networkInterfaceId\\`].value' --output text
+                    --query "tasks[0].attachments[0].details[?name=='networkInterfaceId'].value" --output text
                 """,
                 returnStdout: true
             ).trim()
@@ -712,4 +749,3 @@ def scaleDownOldEnvironment(Map config) {
         echo "⚠️ Continuing pipeline despite error"
     }
 }
-
