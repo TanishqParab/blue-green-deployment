@@ -178,34 +178,7 @@ def call(Map config) {
                 }
             }
 
-            stage('Fetch ALB Resources') {
-                when {
-                    expression { 
-                        (config.implementation == 'ec2' && env.EXECUTION_TYPE == 'APP_DEPLOY') || 
-                        (config.implementation == 'ecs' && env.DEPLOY_NEW_VERSION == 'true')
-                    }
-                }
-                steps {
-                    script {
-                        if (config.implementation == 'ec2') {
-                            ec2Utils.fetchResources(config)
-                        } else if (config.implementation == 'ecs') {
-                            // fetchResources returns a map with keys like IDLE_TG_ARN, LISTENER_ARN, IDLE_ENV
-                            def resourceInfo = ecsUtils.fetchResources(config)
 
-                            // Store these in env variables or a map to use in later stages
-                            env.IDLE_TG_ARN = resourceInfo.IDLE_TG_ARN
-                            env.LISTENER_ARN = resourceInfo.LISTENER_ARN
-                            env.IDLE_ENV = resourceInfo.IDLE_ENV
-
-                            // Also update the config map with these so next stage can use it
-                            config.IDLE_TG_ARN = env.IDLE_TG_ARN
-                            config.LISTENER_ARN = env.LISTENER_ARN
-                            config.IDLE_ENV = env.IDLE_ENV
-                        }
-                    }
-                }
-            }
 
             
             stage('Switch Traffic') {
