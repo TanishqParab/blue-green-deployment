@@ -251,85 +251,82 @@ def deployToBlueInstance(Map config) {
 }
 
 
-def switchTraffic() {
+def switchTraffic(Map config) {
     echo "🔄 Fetching ALB ARN..."
     def albArn = sh(script: """
-        aws elbv2 describe-load-balancers --names blue-green-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text
+        aws elbv2 describe-load-balancers --names blue-green-alb \
+        --query "LoadBalancers[0].LoadBalancerArn" --output text
     """, returnStdout: true).trim()
 
-    if (!albArn || albArn == "None") {
-        error "❌ Failed to retrieve ALB ARN! Check if the load balancer 'blue-green-alb' exists in AWS."
+    if (!albArn) {
+        error "❌ Failed to retrieve ALB ARN!"
     }
     echo "✅ ALB ARN: ${albArn}"
 
-    echo "🔄 Fetching ALB listener ARN (port 80)..."
+    echo "🔄 Fetching Listener ARN..."
     def listenerArn = sh(script: """
-        aws elbv2 describe-listeners --load-balancer-arn ${albArn} --query 'Listeners[?Port==\`80\`].ListenerArn' --output text
+        aws elbv2 describe-listeners --load-balancer-arn ${albArn} \
+        --query "Listeners[?Port==\`80\`].ListenerArn | [0]" --output text
     """, returnStdout: true).trim()
 
-    if (!listenerArn || listenerArn == "None") {
-        error "❌ Listener ARN not found! Check if the ALB has a listener on port 80."
+    if (!listenerArn) {
+        error "❌ Listener ARN not found!"
     }
     echo "✅ Listener ARN: ${listenerArn}"
 
-    echo "🔍 Fetching Blue Target Group ARN..."
-    def blueTGArn = sh(script: """
-        aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text
+    echo "🔄 Fetching Blue Target Group ARN..."
+    def blueTgArn = sh(script: """
+        aws elbv2 describe-target-groups --names blue-tg \
+        --query "TargetGroups[0].TargetGroupArn" --output text
     """, returnStdout: true).trim()
 
-    if (!blueTGArn || blueTGArn == "None") {
-        error "❌ Blue Target Group ARN not found! Check if target group 'blue-tg' exists."
+    if (!blueTgArn) {
+        error "❌ Blue Target Group ARN not found!"
     }
-    echo "✅ Blue Target Group ARN: ${blueTGArn}"
+    echo "✅ Blue TG ARN: ${blueTgArn}"
 
-    echo "🔍 Fetching Green Target Group ARN..."
-    def greenTGArn = sh(script: """
-        aws elbv2 describe-target-groups --names green-tg --query 'TargetGroups[0].TargetGroupArn' --output text
+    echo "🔄 Fetching Green Target Group ARN..."
+    def greenTgArn = sh(script: """
+        aws elbv2 describe-target-groups --names green-tg \
+        --query "TargetGroups[0].TargetGroupArn" --output text
     """, returnStdout: true).trim()
 
-    if (!greenTGArn || greenTGArn == "None") {
-        error "❌ Green Target Group ARN not found! Check if target group 'green-tg' exists."
+    if (!greenTgArn) {
+        error "❌ Green Target Group ARN not found!"
     }
-    echo "✅ Green Target Group ARN: ${greenTGArn}"
+    echo "✅ Green TG ARN: ${greenTgArn}"
 
-    // Clean up any existing priority 10 rules (e.g. rollback rules)
     echo "🔍 Checking for existing priority 10 rules..."
     def ruleArn = sh(script: """
-        aws elbv2 describe-rules --listener-arn '${listenerArn}' --query "Rules[?Priority=='10'].RuleArn | [0]" --output text
+        aws elbv2 describe-rules --listener-arn '${listenerArn}' \
+        --query "Rules[?Priority=='10'].RuleArn | [0]" --output text
     """, returnStdout: true).trim()
 
     if (ruleArn && ruleArn != "None") {
-        echo "🔄 Deleting existing rule (Priority 10)..."
+        echo "🔄 Deleting existing rule with Priority 10..."
         sh "aws elbv2 delete-rule --rule-arn '${ruleArn}'"
-        echo "✅ Removed existing priority 10 rule"
+        echo "✅ Deleted rule ${ruleArn}"
     } else {
-        echo "ℹ️ No existing priority 10 rule found"
+        echo "ℹ️ No existing rule at priority 10"
     }
 
-    // Modify listener default action to forward 100% to blue target group
-    echo "🔄 Configuring default traffic routing to Blue..."
+    echo "🔁 Switching traffic to BLUE..."
     sh """
         aws elbv2 modify-listener --listener-arn ${listenerArn} \
-        --default-actions Type=forward,TargetGroupArn=${blueTGArn}
+        --default-actions Type=forward,TargetGroupArn=${blueTgArn}
     """
 
-    // Verify default action is correctly updated
-    def currentDefaultAction = sh(script: """
+    def currentTargetArn = sh(script: """
         aws elbv2 describe-listeners --listener-arns ${listenerArn} \
-        --query 'Listeners[0].DefaultActions[0].TargetGroupArn' --output text
+        --query "Listeners[0].DefaultActions[0].TargetGroupArn" --output text
     """, returnStdout: true).trim()
 
-    if (currentDefaultAction != blueTGArn) {
-        error "❌ Verification failed! Default action is not pointing to BLUE target group"
+    if (currentTargetArn != blueTgArn) {
+        error "❌ Verification failed! Listener not pointing to BLUE TG."
     }
 
-    echo "✅✅✅ Traffic switched successfully to Blue target group!"
-    echo "============================================="
-    echo "CURRENT ROUTING:"
-    echo "- Default route: 100% to BLUE (${blueTGArn})"
-    echo "- No path-based or weighted rules active"
+    echo "✅✅✅ Traffic successfully routed to BLUE TG!"
 }
-
 
 def tagSwapInstances(Map config) {
     echo "🌐 Discovering AWS resources..."
