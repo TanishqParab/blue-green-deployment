@@ -677,7 +677,7 @@ def scaleDownOldEnvironment(Map config) {
             returnStdout: true
         ).trim()
 
-        def targetGroups = parseJsonSafe(targetGroupsJson)
+        def targetGroups = parseJsonNonCPS(targetGroupsJson)
 
         // Example logic to identify blue and green TG ARNs by name pattern
         def blueTgArn = targetGroups.find { it[1].toLowerCase().contains('blue') }?.getAt(0)
@@ -785,7 +785,7 @@ def scaleDownOldEnvironment(Map config) {
 }
 
 @NonCPS
-def parseJsonSafe(String text) {
+def parseJsonNonCPS(String text) {
     return new groovy.json.JsonSlurper().parseText(text)
 }
 
