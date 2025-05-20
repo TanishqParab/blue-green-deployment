@@ -251,68 +251,82 @@ def deployToBlueInstance(Map config) {
 }
 
 
-def switchTraffic(Map config) {
-    echo "🔄 Fetching ALB listener ARN..."
-
+def switchTraffic() {
+    echo "🔄 Fetching ALB ARN..."
     def albArn = sh(script: """
         aws elbv2 describe-load-balancers --names blue-green-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text
     """, returnStdout: true).trim()
 
-    if (!albArn) {
+    if (!albArn || albArn == "None") {
         error "❌ Failed to retrieve ALB ARN! Check if the load balancer 'blue-green-alb' exists in AWS."
     }
-
     echo "✅ ALB ARN: ${albArn}"
 
+    echo "🔄 Fetching ALB listener ARN (port 80)..."
     def listenerArn = sh(script: """
-        aws elbv2 describe-listeners --load-balancer-arn ${albArn} --query 'Listeners[?Port==`80`].ListenerArn' --output text
+        aws elbv2 describe-listeners --load-balancer-arn ${albArn} --query 'Listeners[?Port==\`80\`].ListenerArn' --output text
     """, returnStdout: true).trim()
 
-    if (!listenerArn) {
-        error "❌ Listener ARN not found! Check if the ALB has a listener attached."
+    if (!listenerArn || listenerArn == "None") {
+        error "❌ Listener ARN not found! Check if the ALB has a listener on port 80."
     }
-
     echo "✅ Listener ARN: ${listenerArn}"
 
-    // Clean up any existing priority 10 rules (from previous rollbacks)
+    echo "🔍 Fetching Blue Target Group ARN..."
+    def blueTGArn = sh(script: """
+        aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text
+    """, returnStdout: true).trim()
+
+    if (!blueTGArn || blueTGArn == "None") {
+        error "❌ Blue Target Group ARN not found! Check if target group 'blue-tg' exists."
+    }
+    echo "✅ Blue Target Group ARN: ${blueTGArn}"
+
+    echo "🔍 Fetching Green Target Group ARN..."
+    def greenTGArn = sh(script: """
+        aws elbv2 describe-target-groups --names green-tg --query 'TargetGroups[0].TargetGroupArn' --output text
+    """, returnStdout: true).trim()
+
+    if (!greenTGArn || greenTGArn == "None") {
+        error "❌ Green Target Group ARN not found! Check if target group 'green-tg' exists."
+    }
+    echo "✅ Green Target Group ARN: ${greenTGArn}"
+
+    // Clean up any existing priority 10 rules (e.g. rollback rules)
     echo "🔍 Checking for existing priority 10 rules..."
     def ruleArn = sh(script: """
-        aws elbv2 describe-rules --listener-arn '${listenerArn}' \
-        --query "Rules[?Priority=='10'].RuleArn | [0]" --output text
+        aws elbv2 describe-rules --listener-arn '${listenerArn}' --query "Rules[?Priority=='10'].RuleArn | [0]" --output text
     """, returnStdout: true).trim()
 
     if (ruleArn && ruleArn != "None") {
         echo "🔄 Deleting existing rule (Priority 10)..."
-        sh """
-            aws elbv2 delete-rule --rule-arn '${ruleArn}'
-        """
+        sh "aws elbv2 delete-rule --rule-arn '${ruleArn}'"
         echo "✅ Removed existing priority 10 rule"
     } else {
         echo "ℹ️ No existing priority 10 rule found"
     }
 
-    // Update default traffic routing (no weighted rule needed)
+    // Modify listener default action to forward 100% to blue target group
     echo "🔄 Configuring default traffic routing to Blue..."
     sh """
         aws elbv2 modify-listener --listener-arn ${listenerArn} \
-        --default-actions Type=forward,TargetGroupArn=${config.BLUE_TG_ARN}
+        --default-actions Type=forward,TargetGroupArn=${blueTGArn}
     """
 
-    // Verification
+    // Verify default action is correctly updated
     def currentDefaultAction = sh(script: """
         aws elbv2 describe-listeners --listener-arns ${listenerArn} \
-        --query 'Listeners[0].DefaultActions[0].ForwardConfig.TargetGroups[0].TargetGroupArn' \
-        --output text
+        --query 'Listeners[0].DefaultActions[0].TargetGroupArn' --output text
     """, returnStdout: true).trim()
 
-    if (currentDefaultAction != config.BLUE_TG_ARN) {
-        error "❌ Verification failed! Default action not pointing to BLUE target group"
+    if (currentDefaultAction != blueTGArn) {
+        error "❌ Verification failed! Default action is not pointing to BLUE target group"
     }
 
-    echo "✅✅✅ Traffic switching completed successfully!"
+    echo "✅✅✅ Traffic switched successfully to Blue target group!"
     echo "============================================="
     echo "CURRENT ROUTING:"
-    echo "- Default route: 100% to BLUE (${config.BLUE_TG_ARN})"
+    echo "- Default route: 100% to BLUE (${blueTGArn})"
     echo "- No path-based or weighted rules active"
 }
 
