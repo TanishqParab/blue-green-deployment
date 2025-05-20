@@ -231,10 +231,8 @@ def call(Map config) {
                                 greenTag: 'Green-Instance'
                             ])
                         } else if (config.implementation == 'ecs') {
-                            // Call shared library method directly with minimal info
-                            ecsUtils.scaleDownOldEnvironment([
-                                liveEnv: env.LIVE_ENV  // optional, just for logging
-                            ])
+                            // Call with no parameters – it discovers ECS info internally
+                            ecsUtils.scaleDownOldEnvironment()
                         }
                     }
                 }
@@ -242,3 +240,4 @@ def call(Map config) {
         }
     }
 }
+
