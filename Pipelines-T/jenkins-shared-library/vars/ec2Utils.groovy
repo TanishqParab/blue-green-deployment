@@ -266,7 +266,7 @@ def switchTraffic(Map config) {
     echo "🔄 Fetching Listener ARN..."
     def listenerArn = sh(script: """
         aws elbv2 describe-listeners --load-balancer-arn ${albArn} \
-        --query "Listeners[?Port==\`80\`].ListenerArn | [0]" --output text
+        --query "Listeners[0].ListenerArn" --output text
     """, returnStdout: true).trim()
 
     if (!listenerArn) {
