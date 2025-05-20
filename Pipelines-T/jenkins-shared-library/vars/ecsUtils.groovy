@@ -385,10 +385,9 @@ def updateApplication(Map config) {
             returnStdout: true
         ).trim()
 
-        def taskDefJson = parseAndCleanTaskDefSafe(taskDefJsonText)
-        taskDefJson.containerDefinitions[0].image = env.IMAGE_URI
-
-        writeFile file: 'new-task-def.json', text: JsonOutput.prettyPrint(JsonOutput.toJson(taskDefJson))
+        // *** THIS IS THE KEY CHANGE: ***
+        def newTaskDefJson = updateTaskDefImageAndSerialize(taskDefJsonText, env.IMAGE_URI)
+        writeFile file: 'new-task-def.json', text: newTaskDefJson
 
         def newTaskDefArn = sh(
             script: "aws ecs register-task-definition --cli-input-json file://new-task-def.json --region ${env.AWS_REGION} --query 'taskDefinition.taskDefinitionArn' --output text",
@@ -432,19 +431,18 @@ def getJsonFieldSafe(String jsonText, String fieldName) {
     return parsed?."${fieldName}"?.toString()
 }
 
+// *** THIS IS THE NEW KEY METHOD ***
 @NonCPS
-def parseAndCleanTaskDefSafe(String jsonText) {
+def updateTaskDefImageAndSerialize(String jsonText, String imageUri) {
     def taskDef = new JsonSlurper().parseText(jsonText)
-
     ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes', 'compatibilities',
      'registeredAt', 'registeredBy', 'deregisteredAt'].each { field ->
         taskDef.remove(field)
     }
-
-    def safeTaskDef = [:]
-    safeTaskDef.putAll(taskDef)
-    return safeTaskDef
+    taskDef.containerDefinitions[0].image = imageUri
+    return JsonOutput.prettyPrint(JsonOutput.toJson(taskDef))
 }
+
 
 
 def testEnvironment(Map config) {
