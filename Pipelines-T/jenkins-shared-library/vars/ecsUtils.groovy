@@ -204,8 +204,6 @@ def fetchResources(Map config) {
 }
 
 
-import groovy.json.JsonSlurper
-
 def ensureTargetGroupAssociation(Map config) {
     echo "Ensuring target group is associated with load balancer..."
 
@@ -223,8 +221,8 @@ def ensureTargetGroupAssociation(Map config) {
         returnStdout: true
     ).trim()
 
-    def jsonSlurper = new JsonSlurper()
-    def targetGroupJson = jsonSlurper.parseText(targetGroupInfo)
+    // Use a @NonCPS helper for JSON parsing
+    def targetGroupJson = parseJson(targetGroupInfo)
 
     if (targetGroupJson.size() == 0) {
         echo "⚠️ Target group ${config.IDLE_ENV} is not associated with a load balancer. Creating a path-based rule..."
@@ -236,7 +234,7 @@ def ensureTargetGroupAssociation(Map config) {
             returnStdout: true
         ).trim()
 
-        def priorities = jsonSlurper.parseText(rulesJson)
+        def priorities = parseJson(rulesJson)
             .findAll { it != 'default' }
             .collect { it as int }
             .sort()
@@ -265,6 +263,11 @@ def ensureTargetGroupAssociation(Map config) {
     } else {
         echo "✅ Target group is already associated with load balancer"
     }
+}
+
+@NonCPS
+def parseJson(String text) {
+    new groovy.json.JsonSlurper().parseText(text)
 }
 
 
