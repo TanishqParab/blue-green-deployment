@@ -610,7 +610,7 @@ def scaleDownOldEnvironment(Map config) {
     echo "📉 Dynamically scaling down old environment (previously live ECS service)..."
 
     try {
-        // 1. Dynamically fetch Load Balancer ARN by name (you can customize albName)
+        // 1. Dynamically fetch Load Balancer ARN by name
         def albName = config.ALB_NAME ?: 'blue-green-alb' // Replace with your ALB name or pass via config
 
         def albArn = sh(
@@ -638,16 +638,16 @@ def scaleDownOldEnvironment(Map config) {
         }
         echo "✅ Found Listener ARN: ${listenerArn}"
 
-        // 3. Fetch the live target group ARN from listener rules with Priority 1
+        // 3. Fetch the live target group ARN from listener rules with Priority '1' or 'default'
         def liveTgArn = sh(
             script: """
-                aws elbv2 describe-rules --listener-arn ${listenerArn} --query "Rules[?Priority=='1'].Actions[0].TargetGroupArn" --output text
+                aws elbv2 describe-rules --listener-arn ${listenerArn} --query "Rules[?Priority=='1' || Priority=='default'].Actions[0].TargetGroupArn" --output text
             """,
             returnStdout: true
         ).trim()
 
         if (!liveTgArn) {
-            error "❌ Live target group ARN could not be determined from listener rule"
+            error "❌ Live target group ARN could not be determined from listener rules"
         }
         echo "✅ Live Target Group ARN: ${liveTgArn}"
 
@@ -661,7 +661,7 @@ def scaleDownOldEnvironment(Map config) {
 
         def targetGroups = parseJsonNonCPS(targetGroupsJson)
 
-        // Example logic to identify blue and green TG ARNs by name pattern
+        // Identify blue and green TG ARNs by name pattern
         def blueTgArn = targetGroups.find { it[1].toLowerCase().contains('blue') }?.getAt(0)
         def greenTgArn = targetGroups.find { it[1].toLowerCase().contains('green') }?.getAt(0)
 
