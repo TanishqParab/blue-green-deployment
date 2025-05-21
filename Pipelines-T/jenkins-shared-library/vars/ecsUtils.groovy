@@ -640,8 +640,7 @@ def scaleDownOldEnvironment(Map config) {
         def idleTgArn = (liveTgArn == blueTgArn) ? greenTgArn : blueTgArn
         echo "✅ Idle (previously live) Target Group ARN: ${idleTgArn}"
 
-        def targetIdsJson = sh(script: "aws elbv2 describe-target-health --target-group-arn ${idleTgArn} --query 'TargetHealthDescriptions[].Target.Id' --output json", returnStdout: true).trim()
-        def targetIds = parseJsonNonCPS(targetIdsJson)
+        def targetIds = sh(script: "aws elbv2 describe-target-health --target-group-arn ${idleTgArn} --query 'TargetHealthDescriptions[].Target.Id' --output text", returnStdout: true).trim()
         if (!targetIds || targetIds.isEmpty()) {
             echo "⚠️ No targets found in the idle target group. Nothing to scale down."
             return
@@ -674,12 +673,14 @@ def scaleDownOldEnvironment(Map config) {
             int attempts = 0
             while (attempts < 3) {
                 def taskArnsJson = sh(script: "aws ecs list-tasks --cluster ${ecsCluster} --service-name ${serviceName} --output json", returnStdout: true).trim()
+                
                 if (!taskArnsJson || !(taskArnsJson.startsWith("{") || taskArnsJson.startsWith("["))) {
                     echo "⚠️ Invalid or empty JSON from list-tasks for service ${serviceName}, retrying (${attempts + 1}/3)..."
                     attempts++
                     sleep 5
                     continue
                 }
+                
                 taskArns = parseJsonNonCPS(taskArnsJson)?.taskArns ?: []
                 if (taskArns) break
                 attempts++
@@ -693,42 +694,27 @@ def scaleDownOldEnvironment(Map config) {
             }
 
             for (taskId in taskArns) {
-                def attachmentsJson = sh(script: "aws ecs describe-tasks --cluster ${ecsCluster} --tasks ${taskId} --query 'tasks[0].attachments' --output json", returnStdout: true).trim()
-
-                if (!attachmentsJson) {
-                    echo "⚠️ No attachments JSON found for task ${taskId}, skipping."
-                    continue
-                }
-                def attachments = parseJsonNonCPS(attachmentsJson)
-
-                if (!attachments) {
-                    echo "⚠️ No attachments found for task ${taskId}, skipping."
+                
+                def eniId = sh(script: "aws ecs describe-tasks --cluster ${ecsCluster} --tasks ${taskId} --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text", returnStdout: true).trim()
+                
+                if (!eniId) {
+                    echo "⚠️ No ENI ID found in attachment details for task ${taskId}, skipping."
                     continue
                 }
 
-                echo "Attachments: ${JsonOutput.toJson(attachments)}"
+                def privateIp = ''
+                try {
+                    privateIp = sh(script: "aws ec2 describe-network-interfaces --network-interface-ids ${eniId} --query 'NetworkInterfaces[0].PrivateIpAddress' --output text", returnStdout: true).trim()
+                    echo "Task ${taskId} ENI ${eniId} IP: ${privateIp}"
+                } catch (Exception ex) {
+                    echo "⚠️ Failed to get private IP for ENI ${eniId}: ${ex.message}"
+                    continue
+                }
 
-                for (attachment in attachments) {
-                    def eniId = attachment.details.find { it.name == 'networkInterfaceId' }?.value
-                    if (!eniId) {
-                        echo "⚠️ No ENI ID found in attachment details for task ${taskId}, skipping."
-                        continue
-                    }
-
-                    def privateIp = ''
-                    try {
-                        privateIp = sh(script: "aws ec2 describe-network-interfaces --network-interface-ids ${eniId} --query 'NetworkInterfaces[0].PrivateIpAddress' --output text", returnStdout: true).trim()
-                        echo "Task ${taskId} ENI ${eniId} IP: ${privateIp}"
-                    } catch (Exception ex) {
-                        echo "⚠️ Failed to get private IP for ENI ${eniId}: ${ex.message}"
-                        continue
-                    }
-
-                    if (targetIds.contains(privateIp) || targetIds.contains(eniId)) {
-                        idleService = serviceName
-                        echo "✅ Match found for service ${serviceName} with target ID ${privateIp}"
-                        break outerLoop
-                    }
+                if (targetIds.contains(privateIp) || targetIds.contains(eniId)) {
+                    idleService = serviceName
+                    echo "✅ Match found for service ${serviceName} with target ID ${privateIp}"
+                    break outerLoop
                 }
             }
         }
