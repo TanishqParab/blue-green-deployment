@@ -1,6 +1,6 @@
 // vars/ec2RollbackUtils.groovy
 
-def fetchEc2Resources(Map config) {
+def fetchResources(Map config) {
     echo "🔄 Fetching EC2 ALB and target group resources..."
 
     def albArn = sh(script: """
