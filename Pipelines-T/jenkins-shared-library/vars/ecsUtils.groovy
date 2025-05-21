@@ -661,9 +661,14 @@ def scaleDownOldEnvironment(Map config) {
 
         def targetGroups = parseJsonNonCPS(targetGroupsJson)
 
-        // Identify blue and green TG ARNs by name pattern
-        def blueTgArn = targetGroups.find { it[1].toLowerCase().contains('blue') }?.getAt(0)
-        def greenTgArn = targetGroups.find { it[1].toLowerCase().contains('green') }?.getAt(0)
+        echo "🔍 Target Groups found:"
+        targetGroups.each { tg ->
+            echo " - Name: ${tg[1]}, ARN: ${tg[0]}"
+        }
+
+        // Exact matching for blue-tg and green-tg
+        def blueTgArn = targetGroups.find { it[1].toLowerCase() == 'blue-tg' }?.getAt(0)
+        def greenTgArn = targetGroups.find { it[1].toLowerCase() == 'green-tg' }?.getAt(0)
 
         if (!blueTgArn || !greenTgArn) {
             error "❌ Could not find both Blue and Green target groups in ALB ${albArn}"
@@ -770,4 +775,5 @@ def scaleDownOldEnvironment(Map config) {
 def parseJsonNonCPS(String text) {
     return new groovy.json.JsonSlurper().parseText(text)
 }
+
 
