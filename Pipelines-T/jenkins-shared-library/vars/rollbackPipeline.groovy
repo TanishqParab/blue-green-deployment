@@ -91,7 +91,7 @@ def call(Map config) {
                 }
                 steps {
                     script {
-                        ecsUtils.testRollbackEnvironment(config)
+                        ecsRollbackUtils.testRollbackEnvironment(config)
                     }
                 }
             }
