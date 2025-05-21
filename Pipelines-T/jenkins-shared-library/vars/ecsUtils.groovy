@@ -653,7 +653,8 @@ def scaleDownOldEnvironment(Map config) {
         def servicesRaw = sh(script: "aws ecs list-services --cluster ${ecsCluster} --output text", returnStdout: true).trim()
         echo "Raw ECS services output:\n${servicesRaw}"
 
-        def services = servicesRaw.split('\n').findAll { it && !it.startsWith('SERVICEARNS') }
+        // Fix: tokenize output by whitespace and filter out header tokens
+        def services = servicesRaw.tokenize().findAll { !it.startsWith('SERVICEARNS') }
         if (!services) {
             echo "⚠️ No ECS services found in cluster ${ecsCluster}. Skipping scale down."
             return
@@ -668,8 +669,18 @@ def scaleDownOldEnvironment(Map config) {
             def serviceName = serviceArn.tokenize('/').last()
             echo "Checking service: ${serviceName}"
 
-            def taskArnsJson = sh(script: "aws ecs list-tasks --cluster ${ecsCluster} --service-name ${serviceName} --output json", returnStdout: true).trim()
-            def taskArns = parseJsonNonCPS(taskArnsJson)?.taskArns ?: []
+            // Optional: retry logic for list-tasks (up to 3 attempts)
+            def taskArns = []
+            int attempts = 0
+            while (attempts < 3) {
+                def taskArnsJson = sh(script: "aws ecs list-tasks --cluster ${ecsCluster} --service-name ${serviceName} --output json", returnStdout: true).trim()
+                taskArns = parseJsonNonCPS(taskArnsJson)?.taskArns ?: []
+                if (taskArns) break
+                attempts++
+                echo "No tasks found for service ${serviceName}, retrying (${attempts}/3)..."
+                sleep 5
+            }
+
             if (!taskArns) {
                 echo "No tasks found for service ${serviceName}, skipping."
                 continue
@@ -705,7 +716,6 @@ def scaleDownOldEnvironment(Map config) {
 
         echo "✅ Idle ECS service to scale down: ${idleService}"
 
-        // Scale down idle ECS service
         sh "aws ecs update-service --cluster ${ecsCluster} --service ${idleService} --desired-count 0"
         echo "✅ Successfully scaled down ${idleService}"
 
@@ -722,4 +732,5 @@ def scaleDownOldEnvironment(Map config) {
 def parseJsonNonCPS(String text) {
     return new groovy.json.JsonSlurper().parseText(text)
 }
+
 
