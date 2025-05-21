@@ -606,6 +606,8 @@ def switchTraffic(Map config) {
 }
 
 
+import groovy.json.JsonOutput
+
 def scaleDownOldEnvironment(Map config) {
     echo "📉 Dynamically scaling down old environment (previously live ECS service)..."
 
@@ -644,7 +646,7 @@ def scaleDownOldEnvironment(Map config) {
             echo "⚠️ No targets found in the idle target group. Nothing to scale down."
             return
         }
-        echo "✅ Target IDs in idle TG: ${targetIds}"
+        echo "✅ Target IDs in idle TG: ${JsonOutput.toJson(targetIds)}"
 
         def ecsCluster = sh(script: "aws ecs list-clusters --query 'clusterArns[0]' --output text", returnStdout: true).trim()
         if (!ecsCluster || ecsCluster == 'None') error "❌ No ECS cluster found"
@@ -688,11 +690,19 @@ def scaleDownOldEnvironment(Map config) {
 
             for (taskId in taskArns) {
                 def attachmentsJson = sh(script: "aws ecs describe-tasks --cluster ${ecsCluster} --tasks ${taskId} --query 'tasks[0].attachments' --output json", returnStdout: true).trim()
-                def attachments = parseJsonNonCPS(attachmentsJson)
-                if (!attachments) {
-                    echo "No attachments found for task ${taskId}, skipping."
+
+                if (!attachmentsJson) {
+                    echo "⚠️ No attachments JSON found for task ${taskId}, skipping."
                     continue
                 }
+                def attachments = parseJsonNonCPS(attachmentsJson)
+
+                if (!attachments) {
+                    echo "⚠️ No attachments found for task ${taskId}, skipping."
+                    continue
+                }
+
+                echo "Attachments: ${JsonOutput.toJson(attachments)}"
 
                 for (attachment in attachments) {
                     def eniId = attachment.details.find { it.name == 'networkInterfaceId' }?.value
@@ -732,5 +742,6 @@ def scaleDownOldEnvironment(Map config) {
 def parseJsonNonCPS(String text) {
     return new groovy.json.JsonSlurper().parseText(text)
 }
+
 
 
