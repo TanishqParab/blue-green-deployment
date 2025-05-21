@@ -1,6 +1,6 @@
 // vars/ecsRollbackUtils.groovy
 
-def fetchEcsResources(Map config) {
+def fetchResources(Map config) {
     echo "🔎 Finding previous ECS image for rollback..."
 
     try {
