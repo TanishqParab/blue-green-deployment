@@ -674,6 +674,12 @@ def scaleDownOldEnvironment(Map config) {
             int attempts = 0
             while (attempts < 3) {
                 def taskArnsJson = sh(script: "aws ecs list-tasks --cluster ${ecsCluster} --service-name ${serviceName} --output json", returnStdout: true).trim()
+                if (!taskArnsJson || !(taskArnsJson.startsWith("{") || taskArnsJson.startsWith("["))) {
+                    echo "⚠️ Invalid or empty JSON from list-tasks for service ${serviceName}, retrying (${attempts + 1}/3)..."
+                    attempts++
+                    sleep 5
+                    continue
+                }
                 taskArns = parseJsonNonCPS(taskArnsJson)?.taskArns ?: []
                 if (taskArns) break
                 attempts++
@@ -704,7 +710,10 @@ def scaleDownOldEnvironment(Map config) {
 
                 for (attachment in attachments) {
                     def eniId = attachment.details.find { it.name == 'networkInterfaceId' }?.value
-                    if (!eniId) continue
+                    if (!eniId) {
+                        echo "⚠️ No ENI ID found in attachment details for task ${taskId}, skipping."
+                        continue
+                    }
 
                     def privateIp = ''
                     try {
