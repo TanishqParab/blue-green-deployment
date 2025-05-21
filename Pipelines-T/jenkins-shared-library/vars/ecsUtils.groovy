@@ -610,83 +610,35 @@ def scaleDownOldEnvironment(Map config) {
     echo "📉 Dynamically scaling down old environment (previously live ECS service)..."
 
     try {
-        // 1. Dynamically fetch Load Balancer ARN by name
         def albName = config.ALB_NAME ?: 'blue-green-alb'
 
-        def albArn = sh(
-            script: """
-                aws elbv2 describe-load-balancers --names ${albName} --query 'LoadBalancers[0].LoadBalancerArn' --output text
-            """,
-            returnStdout: true
-        ).trim()
-
-        if (!albArn || albArn == 'None') {
-            error "❌ Could not find ALB ARN for name: ${albName}"
-        }
+        def albArn = sh(script: "aws elbv2 describe-load-balancers --names ${albName} --query 'LoadBalancers[0].LoadBalancerArn' --output text", returnStdout: true).trim()
+        if (!albArn || albArn == 'None') error "❌ Could not find ALB ARN for name: ${albName}"
         echo "✅ Found ALB ARN: ${albArn}"
 
-        // 2. Fetch Listener ARN(s) for the ALB, pick the first with forward action
-        def listenerArn = sh(
-            script: """
-                aws elbv2 describe-listeners --load-balancer-arn ${albArn} --query "Listeners[?DefaultActions[0].Type=='forward'].[ListenerArn]" --output text
-            """,
-            returnStdout: true
-        ).trim()
-
-        if (!listenerArn) {
-            error "❌ Listener ARN could not be determined from ALB ${albArn}"
-        }
+        def listenerArn = sh(script: "aws elbv2 describe-listeners --load-balancer-arn ${albArn} --query \"Listeners[?DefaultActions[0].Type=='forward'].[ListenerArn]\" --output text", returnStdout: true).trim()
+        if (!listenerArn) error "❌ Listener ARN could not be determined from ALB ${albArn}"
         echo "✅ Found Listener ARN: ${listenerArn}"
 
-        // 3. Fetch the live target group ARN from listener rules with Priority '1' or 'default'
-        def liveTgArn = sh(
-            script: """
-                aws elbv2 describe-rules --listener-arn ${listenerArn} --query "Rules[?Priority=='1' || Priority=='default'].Actions[0].TargetGroupArn" --output text
-            """,
-            returnStdout: true
-        ).trim()
-
-        if (!liveTgArn) {
-            error "❌ Live target group ARN could not be determined from listener rules"
-        }
+        def liveTgArn = sh(script: "aws elbv2 describe-rules --listener-arn ${listenerArn} --query \"Rules[?Priority=='1' || Priority=='default'].Actions[0].TargetGroupArn\" --output text", returnStdout: true).trim()
+        if (!liveTgArn) error "❌ Live target group ARN could not be determined from listener rules"
         echo "✅ Live Target Group ARN: ${liveTgArn}"
 
-        // 4. Fetch all target groups for the ALB to identify blue and green (or idle) target groups
-        def targetGroupsJson = sh(
-            script: """
-                aws elbv2 describe-target-groups --load-balancer-arn ${albArn} --query 'TargetGroups[*].[TargetGroupArn, TargetGroupName]' --output json
-            """,
-            returnStdout: true
-        ).trim()
-
+        def targetGroupsJson = sh(script: "aws elbv2 describe-target-groups --load-balancer-arn ${albArn} --query 'TargetGroups[*].[TargetGroupArn, TargetGroupName]' --output json", returnStdout: true).trim()
         def targetGroups = parseJsonNonCPS(targetGroupsJson)
-
         echo "🔍 Target Groups found:"
-        targetGroups.each { tg ->
-            echo " - Name: ${tg[1]}, ARN: ${tg[0]}"
-        }
+        targetGroups.each { echo " - Name: ${it[1]}, ARN: ${it[0]}" }
 
         def blueTgArn = targetGroups.find { it[1].toLowerCase() == 'blue-tg' }?.getAt(0)
         def greenTgArn = targetGroups.find { it[1].toLowerCase() == 'green-tg' }?.getAt(0)
-
-        if (!blueTgArn || !greenTgArn) {
-            error "❌ Could not find both Blue and Green target groups in ALB ${albArn}"
-        }
+        if (!blueTgArn || !greenTgArn) error "❌ Could not find both Blue and Green target groups in ALB ${albArn}"
         echo "✅ Blue TG ARN: ${blueTgArn}"
         echo "✅ Green TG ARN: ${greenTgArn}"
 
-        // 5. Determine idle target group ARN (the one NOT currently live)
         def idleTgArn = (liveTgArn == blueTgArn) ? greenTgArn : blueTgArn
         echo "✅ Idle (previously live) Target Group ARN: ${idleTgArn}"
 
-        // 6. Get all target IDs (IPs or instance IDs) from the idle target group
-        def targetIdsJson = sh(
-            script: """
-                aws elbv2 describe-target-health --target-group-arn ${idleTgArn} --query 'TargetHealthDescriptions[].Target.Id' --output json
-            """,
-            returnStdout: true
-        ).trim()
-
+        def targetIdsJson = sh(script: "aws elbv2 describe-target-health --target-group-arn ${idleTgArn} --query 'TargetHealthDescriptions[].Target.Id' --output json", returnStdout: true).trim()
         def targetIds = parseJsonNonCPS(targetIdsJson)
         if (!targetIds || targetIds.isEmpty()) {
             echo "⚠️ No targets found in the idle target group. Nothing to scale down."
@@ -694,44 +646,29 @@ def scaleDownOldEnvironment(Map config) {
         }
         echo "✅ Target IDs in idle TG: ${targetIds}"
 
-        // 7. Find ECS cluster ARN (assumes single cluster)
-        def ecsCluster = sh(
-            script: "aws ecs list-clusters --query 'clusterArns[0]' --output text",
-            returnStdout: true
-        ).trim()
-
-        if (!ecsCluster || ecsCluster == 'None') {
-            error "❌ No ECS cluster found"
-        }
+        def ecsCluster = sh(script: "aws ecs list-clusters --query 'clusterArns[0]' --output text", returnStdout: true).trim()
+        if (!ecsCluster || ecsCluster == 'None') error "❌ No ECS cluster found"
         echo "✅ ECS Cluster ARN: ${ecsCluster}"
 
-        // 8. List ECS services in the cluster
-        def servicesRaw = sh(
-            script: "aws ecs list-services --cluster ${ecsCluster} --output text",
-            returnStdout: true
-        ).trim().split('\n')
+        def servicesRaw = sh(script: "aws ecs list-services --cluster ${ecsCluster} --output text", returnStdout: true).trim()
+        echo "Raw ECS services output:\n${servicesRaw}"
 
-        // Filter out header lines starting with SERVICEARNS
-        def services = servicesRaw.findAll { it && !it.startsWith('SERVICEARNS') }
-
-        echo "ECS services found:"
+        def services = servicesRaw.split('\n').findAll { it && !it.startsWith('SERVICEARNS') }
+        if (!services) {
+            echo "⚠️ No ECS services found in cluster ${ecsCluster}. Skipping scale down."
+            return
+        }
+        echo "Filtered ECS services:"
         services.each { echo " - ${it}" }
 
         def idleService = null
 
-        // 9. For each service, check if any task's ENI matches any target ID
         outerLoop:
         for (serviceArn in services) {
             def serviceName = serviceArn.tokenize('/').last()
             echo "Checking service: ${serviceName}"
 
-            def taskArnsJson = sh(
-                script: """
-                    aws ecs list-tasks --cluster ${ecsCluster} --service-name ${serviceName} --output json
-                """,
-                returnStdout: true
-            ).trim()
-
+            def taskArnsJson = sh(script: "aws ecs list-tasks --cluster ${ecsCluster} --service-name ${serviceName} --output json", returnStdout: true).trim()
             def taskArns = parseJsonNonCPS(taskArnsJson)?.taskArns ?: []
             if (!taskArns) {
                 echo "No tasks found for service ${serviceName}, skipping."
@@ -739,13 +676,7 @@ def scaleDownOldEnvironment(Map config) {
             }
 
             for (taskId in taskArns) {
-                def attachmentsJson = sh(
-                    script: """
-                        aws ecs describe-tasks --cluster ${ecsCluster} --tasks ${taskId} --query 'tasks[0].attachments' --output json
-                    """,
-                    returnStdout: true
-                ).trim()
-
+                def attachmentsJson = sh(script: "aws ecs describe-tasks --cluster ${ecsCluster} --tasks ${taskId} --query 'tasks[0].attachments' --output json", returnStdout: true).trim()
                 def attachments = parseJsonNonCPS(attachmentsJson)
                 if (!attachments) {
                     echo "No attachments found for task ${taskId}, skipping."
@@ -754,17 +685,9 @@ def scaleDownOldEnvironment(Map config) {
 
                 for (attachment in attachments) {
                     def eniId = attachment.details.find { it.name == 'networkInterfaceId' }?.value
-                    if (!eniId) {
-                        continue
-                    }
+                    if (!eniId) continue
 
-                    def privateIp = sh(
-                        script: """
-                            aws ec2 describe-network-interfaces --network-interface-ids ${eniId} --query 'NetworkInterfaces[0].PrivateIpAddress' --output text
-                        """,
-                        returnStdout: true
-                    ).trim()
-
+                    def privateIp = sh(script: "aws ec2 describe-network-interfaces --network-interface-ids ${eniId} --query 'NetworkInterfaces[0].PrivateIpAddress' --output text", returnStdout: true).trim()
                     echo "Task ${taskId} ENI ${eniId} IP: ${privateIp}"
 
                     if (targetIds.contains(privateIp) || targetIds.contains(eniId)) {
@@ -782,17 +705,11 @@ def scaleDownOldEnvironment(Map config) {
 
         echo "✅ Idle ECS service to scale down: ${idleService}"
 
-        // 10. Scale down the idle ECS service
-        sh """
-            aws ecs update-service --cluster ${ecsCluster} --service ${idleService} --desired-count 0
-        """
-
+        // Scale down idle ECS service
+        sh "aws ecs update-service --cluster ${ecsCluster} --service ${idleService} --desired-count 0"
         echo "✅ Successfully scaled down ${idleService}"
 
-        sh """
-            aws ecs wait services-stable --cluster ${ecsCluster} --services ${idleService}
-        """
-
+        sh "aws ecs wait services-stable --cluster ${ecsCluster} --services ${idleService}"
         echo "✅ Service is now stable"
 
     } catch (Exception e) {
