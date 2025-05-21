@@ -611,7 +611,7 @@ def scaleDownOldEnvironment(Map config) {
 
     try {
         // 1. Dynamically fetch Load Balancer ARN by name
-        def albName = config.ALB_NAME ?: 'blue-green-alb' // Replace with your ALB name or pass via config
+        def albName = config.ALB_NAME ?: 'blue-green-alb'
 
         def albArn = sh(
             script: """
@@ -666,7 +666,6 @@ def scaleDownOldEnvironment(Map config) {
             echo " - Name: ${tg[1]}, ARN: ${tg[0]}"
         }
 
-        // Exact matching for blue-tg and green-tg
         def blueTgArn = targetGroups.find { it[1].toLowerCase() == 'blue-tg' }?.getAt(0)
         def greenTgArn = targetGroups.find { it[1].toLowerCase() == 'green-tg' }?.getAt(0)
 
@@ -680,18 +679,20 @@ def scaleDownOldEnvironment(Map config) {
         def idleTgArn = (liveTgArn == blueTgArn) ? greenTgArn : blueTgArn
         echo "✅ Idle (previously live) Target Group ARN: ${idleTgArn}"
 
-        // 6. Get one target's ID (IP or instance ID) from the idle target group
-        def targetId = sh(
+        // 6. Get all target IDs (IPs or instance IDs) from the idle target group
+        def targetIdsJson = sh(
             script: """
-                aws elbv2 describe-target-health --target-group-arn ${idleTgArn} --query 'TargetHealthDescriptions[0].Target.Id' --output text
+                aws elbv2 describe-target-health --target-group-arn ${idleTgArn} --query 'TargetHealthDescriptions[].Target.Id' --output json
             """,
             returnStdout: true
         ).trim()
 
-        if (!targetId || targetId == "None") {
+        def targetIds = parseJsonNonCPS(targetIdsJson)
+        if (!targetIds || targetIds.isEmpty()) {
             echo "⚠️ No targets found in the idle target group. Nothing to scale down."
             return
         }
+        echo "✅ Target IDs in idle TG: ${targetIds}"
 
         // 7. Find ECS cluster ARN (assumes single cluster)
         def ecsCluster = sh(
@@ -702,6 +703,7 @@ def scaleDownOldEnvironment(Map config) {
         if (!ecsCluster || ecsCluster == 'None') {
             error "❌ No ECS cluster found"
         }
+        echo "✅ ECS Cluster ARN: ${ecsCluster}"
 
         // 8. List ECS services in the cluster
         def servicesRaw = sh(
@@ -717,41 +719,60 @@ def scaleDownOldEnvironment(Map config) {
 
         def idleService = null
 
-        // 9. For each service, check if any task's ENI matches the target ID
+        // 9. For each service, check if any task's ENI matches any target ID
+        outerLoop:
         for (serviceArn in services) {
             def serviceName = serviceArn.tokenize('/').last()
             echo "Checking service: ${serviceName}"
 
-            def taskArns = sh(
+            def taskArnsJson = sh(
                 script: """
-                    aws ecs list-tasks --cluster ${ecsCluster} --service-name ${serviceName} --output text
+                    aws ecs list-tasks --cluster ${ecsCluster} --service-name ${serviceName} --output json
                 """,
                 returnStdout: true
             ).trim()
 
-            if (!taskArns || taskArns == "None") {
+            def taskArns = parseJsonNonCPS(taskArnsJson)?.taskArns ?: []
+            if (!taskArns) {
                 echo "No tasks found for service ${serviceName}, skipping."
                 continue
             }
 
-            def taskId = taskArns.split().first()
-            def eni = sh(
-                script: """
-                    aws ecs describe-tasks --cluster ${ecsCluster} --tasks ${taskId} --query "tasks[0].attachments[0].details[?name=='networkInterfaceId'].value" --output text
-                """,
-                returnStdout: true
-            ).trim()
+            for (taskId in taskArns) {
+                def attachmentsJson = sh(
+                    script: """
+                        aws ecs describe-tasks --cluster ${ecsCluster} --tasks ${taskId} --query 'tasks[0].attachments' --output json
+                    """,
+                    returnStdout: true
+                ).trim()
 
-            def privateIp = sh(
-                script: """
-                    aws ec2 describe-network-interfaces --network-interface-ids ${eni} --query 'NetworkInterfaces[0].PrivateIpAddress' --output text
-                """,
-                returnStdout: true
-            ).trim()
+                def attachments = parseJsonNonCPS(attachmentsJson)
+                if (!attachments) {
+                    echo "No attachments found for task ${taskId}, skipping."
+                    continue
+                }
 
-            if (privateIp == targetId) {
-                idleService = serviceName
-                break
+                for (attachment in attachments) {
+                    def eniId = attachment.details.find { it.name == 'networkInterfaceId' }?.value
+                    if (!eniId) {
+                        continue
+                    }
+
+                    def privateIp = sh(
+                        script: """
+                            aws ec2 describe-network-interfaces --network-interface-ids ${eniId} --query 'NetworkInterfaces[0].PrivateIpAddress' --output text
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    echo "Task ${taskId} ENI ${eniId} IP: ${privateIp}"
+
+                    if (targetIds.contains(privateIp) || targetIds.contains(eniId)) {
+                        idleService = serviceName
+                        echo "✅ Match found for service ${serviceName} with target ID ${privateIp}"
+                        break outerLoop
+                    }
+                }
             }
         }
 
@@ -784,5 +805,4 @@ def scaleDownOldEnvironment(Map config) {
 def parseJsonNonCPS(String text) {
     return new groovy.json.JsonSlurper().parseText(text)
 }
-
 
