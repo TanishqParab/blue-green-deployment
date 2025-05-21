@@ -655,7 +655,6 @@ def scaleDownOldEnvironment(Map config) {
         def servicesRaw = sh(script: "aws ecs list-services --cluster ${ecsCluster} --output text", returnStdout: true).trim()
         echo "Raw ECS services output:\n${servicesRaw}"
 
-        // Fix: tokenize output by whitespace and filter out header tokens
         def services = servicesRaw.tokenize().findAll { !it.startsWith('SERVICEARNS') }
         if (!services) {
             echo "⚠️ No ECS services found in cluster ${ecsCluster}. Skipping scale down."
@@ -671,7 +670,6 @@ def scaleDownOldEnvironment(Map config) {
             def serviceName = serviceArn.tokenize('/').last()
             echo "Checking service: ${serviceName}"
 
-            // Optional: retry logic for list-tasks (up to 3 attempts)
             def taskArns = []
             int attempts = 0
             while (attempts < 3) {
@@ -690,13 +688,11 @@ def scaleDownOldEnvironment(Map config) {
 
             for (taskId in taskArns) {
                 def attachmentsJson = sh(script: "aws ecs describe-tasks --cluster ${ecsCluster} --tasks ${taskId} --query 'tasks[0].attachments' --output json", returnStdout: true).trim()
-
                 if (!attachmentsJson) {
                     echo "⚠️ No attachments JSON found for task ${taskId}, skipping."
                     continue
                 }
                 def attachments = parseJsonNonCPS(attachmentsJson)
-
                 if (!attachments) {
                     echo "⚠️ No attachments found for task ${taskId}, skipping."
                     continue
@@ -708,8 +704,14 @@ def scaleDownOldEnvironment(Map config) {
                     def eniId = attachment.details.find { it.name == 'networkInterfaceId' }?.value
                     if (!eniId) continue
 
-                    def privateIp = sh(script: "aws ec2 describe-network-interfaces --network-interface-ids ${eniId} --query 'NetworkInterfaces[0].PrivateIpAddress' --output text", returnStdout: true).trim()
-                    echo "Task ${taskId} ENI ${eniId} IP: ${privateIp}"
+                    def privateIp = ''
+                    try {
+                        privateIp = sh(script: "aws ec2 describe-network-interfaces --network-interface-ids ${eniId} --query 'NetworkInterfaces[0].PrivateIpAddress' --output text", returnStdout: true).trim()
+                        echo "Task ${taskId} ENI ${eniId} IP: ${privateIp}"
+                    } catch (Exception ex) {
+                        echo "⚠️ Failed to get private IP for ENI ${eniId}: ${ex.message}"
+                        continue
+                    }
 
                     if (targetIds.contains(privateIp) || targetIds.contains(eniId)) {
                         idleService = serviceName
