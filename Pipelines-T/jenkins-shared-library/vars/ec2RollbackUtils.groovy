@@ -14,7 +14,7 @@ def fetchEc2Resources(Map config) {
     env.ALB_ARN = albArn
 
     def listenerArn = sh(script: """
-        aws elbv2 describe-listeners --load-balancer-arn ${albArn} --query 'Listeners[?Port==\`80\`].ListenerArn' --output text
+        aws elbv2 describe-listeners --load-balancer-arn ${albArn} --query 'Listeners[?Port==`80`].ListenerArn' --output text
     """, returnStdout: true).trim()
 
     if (!listenerArn) {
