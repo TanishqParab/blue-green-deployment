@@ -78,7 +78,7 @@ def fetchResources(Map config) {
 }
 
 
-def prepareEcsRollback(Map config) {
+def prepareRollback(Map config) {
     echo "🚀 Preparing ECS rollback deployment..."
 
     try {
