@@ -688,11 +688,13 @@ def scaleDownOldEnvironment(Map config) {
 
             for (taskId in taskArns) {
                 def attachmentsJson = sh(script: "aws ecs describe-tasks --cluster ${ecsCluster} --tasks ${taskId} --query 'tasks[0].attachments' --output json", returnStdout: true).trim()
+
                 if (!attachmentsJson) {
                     echo "⚠️ No attachments JSON found for task ${taskId}, skipping."
                     continue
                 }
                 def attachments = parseJsonNonCPS(attachmentsJson)
+
                 if (!attachments) {
                     echo "⚠️ No attachments found for task ${taskId}, skipping."
                     continue
@@ -744,6 +746,7 @@ def scaleDownOldEnvironment(Map config) {
 def parseJsonNonCPS(String text) {
     return new groovy.json.JsonSlurper().parseText(text)
 }
+
 
 
 
