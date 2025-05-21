@@ -704,16 +704,24 @@ def scaleDownOldEnvironment(Map config) {
         }
 
         // 8. List ECS services in the cluster
-        def services = sh(
+        def servicesRaw = sh(
             script: "aws ecs list-services --cluster ${ecsCluster} --output text",
             returnStdout: true
-        ).trim().split()
+        ).trim().split('\n')
+
+        // Filter out header lines starting with SERVICEARNS
+        def services = servicesRaw.findAll { it && !it.startsWith('SERVICEARNS') }
+
+        echo "ECS services found:"
+        services.each { echo " - ${it}" }
 
         def idleService = null
 
         // 9. For each service, check if any task's ENI matches the target ID
         for (serviceArn in services) {
             def serviceName = serviceArn.tokenize('/').last()
+            echo "Checking service: ${serviceName}"
+
             def taskArns = sh(
                 script: """
                     aws ecs list-tasks --cluster ${ecsCluster} --service-name ${serviceName} --output text
@@ -722,6 +730,7 @@ def scaleDownOldEnvironment(Map config) {
             ).trim()
 
             if (!taskArns || taskArns == "None") {
+                echo "No tasks found for service ${serviceName}, skipping."
                 continue
             }
 
