@@ -669,35 +669,40 @@ def scaleDownOldEnvironment(Map config) {
         echo "✅ Dynamically fetched ECS_CLUSTER: ${config.ECS_CLUSTER}"
     }
 
-    echo "📉 Scaling down old environment (${config.ACTIVE_ENV})..."
-
-    // Validate ACTIVE_ENV presence
+    // Validate ACTIVE_ENV presence before usage
     if (!config.ACTIVE_ENV) {
         error "ACTIVE_ENV is required"
     }
+
+    echo "📉 Scaling down old environment (${config.ACTIVE_ENV})..."
 
     // Dynamically determine ACTIVE_SERVICE if not provided
     if (!config.ACTIVE_SERVICE) {
         echo "⚙️ ACTIVE_SERVICE not set, determining dynamically based on ACTIVE_ENV..."
 
-        // Assuming service naming convention: 'blue-service' and 'green-service'
         def activeEnvLower = config.ACTIVE_ENV.toLowerCase()
-        def activeServiceName = "${activeEnvLower}-service"
+        def expectedServiceName = "${activeEnvLower}-service"
 
-        // Optionally, verify the service exists in the cluster
+        // List ECS services in the cluster
         def servicesJson = sh(
             script: "aws ecs list-services --cluster ${config.ECS_CLUSTER} --query 'serviceArns' --output json",
             returnStdout: true
         ).trim()
 
         def services = new JsonSlurper().parseText(servicesJson)
-        def matchedServiceArn = services.find { it.toLowerCase().endsWith(activeServiceName.toLowerCase()) }
 
-        if (!matchedServiceArn) {
-            error "Active service '${activeServiceName}' not found in cluster ${config.ECS_CLUSTER}"
+        if (!services || services.isEmpty()) {
+            error "No ECS services found in cluster ${config.ECS_CLUSTER}"
         }
 
-        // Extract service name from ARN
+        // Find service ARN that ends with expected service name (case-insensitive)
+        def matchedServiceArn = services.find { it.toLowerCase().endsWith(expectedServiceName.toLowerCase()) }
+
+        if (!matchedServiceArn) {
+            error "Active service '${expectedServiceName}' not found in cluster ${config.ECS_CLUSTER}"
+        }
+
+        // Extract service name from ARN (last token after '/')
         def serviceName = matchedServiceArn.tokenize('/').last()
 
         config.ACTIVE_SERVICE = serviceName
@@ -739,6 +744,7 @@ def scaleDownOldEnvironment(Map config) {
             script: "aws elbv2 describe-target-health --target-group-arn ${config.IDLE_TG_ARN} --query 'TargetHealthDescriptions[*].TargetHealth.State' --output json",
             returnStdout: true
         ).trim()
+
         def states = new JsonSlurper().parseText(healthJson)
         healthyCount = states.count { it == "healthy" }
         echo "Healthy targets: ${healthyCount} / ${states.size()}"
@@ -747,6 +753,7 @@ def scaleDownOldEnvironment(Map config) {
             echo "✅ All targets in ${config.IDLE_ENV} TG are healthy."
             break
         }
+
         attempt++
         sleep 10
     }
