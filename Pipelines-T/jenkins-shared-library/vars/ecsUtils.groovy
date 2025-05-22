@@ -654,6 +654,37 @@ import groovy.json.JsonSlurper
 def scaleDownOldEnvironment(Map config) {
     echo "📉 Scaling down old environment (${config.ACTIVE_ENV})..."
 
+    // Validate required parameters
+    if (!config.ECS_CLUSTER) error "ECS_CLUSTER is required"
+    if (!config.ACTIVE_SERVICE) error "ACTIVE_SERVICE is required"
+    if (!config.ACTIVE_ENV) error "ACTIVE_ENV is required"
+
+    // Dynamically fetch IDLE_ENV and IDLE_TG_ARN if not provided
+    if (!config.IDLE_ENV || !config.IDLE_TG_ARN) {
+        echo "⚙️ IDLE_ENV or IDLE_TG_ARN not set, fetching dynamically..."
+
+        // Fetch blue and green TG ARNs
+        def blueTgArn = sh(script: "aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text", returnStdout: true).trim()
+        def greenTgArn = sh(script: "aws elbv2 describe-target-groups --names green-tg --query 'TargetGroups[0].TargetGroupArn' --output text", returnStdout: true).trim()
+
+        if (!blueTgArn || blueTgArn == 'None') error "Blue target group ARN not found"
+        if (!greenTgArn || greenTgArn == 'None') error "Green target group ARN not found"
+
+        // Determine idle environment and TG ARN based on active TG ARN
+        if (config.ACTIVE_ENV.toUpperCase() == "BLUE") {
+            config.IDLE_ENV = "GREEN"
+            config.IDLE_TG_ARN = greenTgArn
+        } else if (config.ACTIVE_ENV.toUpperCase() == "GREEN") {
+            config.IDLE_ENV = "BLUE"
+            config.IDLE_TG_ARN = blueTgArn
+        } else {
+            error "ACTIVE_ENV must be 'BLUE' or 'GREEN'"
+        }
+
+        echo "✅ Dynamically determined IDLE_ENV: ${config.IDLE_ENV}"
+        echo "✅ Dynamically determined IDLE_TG_ARN: ${config.IDLE_TG_ARN}"
+    }
+
     // --- Wait for new target group health before scaling down ---
     int maxAttempts = 30
     int attempt = 0
