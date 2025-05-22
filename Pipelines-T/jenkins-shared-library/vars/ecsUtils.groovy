@@ -671,9 +671,38 @@ def scaleDownOldEnvironment(Map config) {
 
     echo "📉 Scaling down old environment (${config.ACTIVE_ENV})..."
 
-    // Validate required parameters
-    if (!config.ACTIVE_SERVICE) error "ACTIVE_SERVICE is required"
-    if (!config.ACTIVE_ENV) error "ACTIVE_ENV is required"
+    // Validate ACTIVE_ENV presence
+    if (!config.ACTIVE_ENV) {
+        error "ACTIVE_ENV is required"
+    }
+
+    // Dynamically determine ACTIVE_SERVICE if not provided
+    if (!config.ACTIVE_SERVICE) {
+        echo "⚙️ ACTIVE_SERVICE not set, determining dynamically based on ACTIVE_ENV..."
+
+        // Assuming service naming convention: 'blue-service' and 'green-service'
+        def activeEnvLower = config.ACTIVE_ENV.toLowerCase()
+        def activeServiceName = "${activeEnvLower}-service"
+
+        // Optionally, verify the service exists in the cluster
+        def servicesJson = sh(
+            script: "aws ecs list-services --cluster ${config.ECS_CLUSTER} --query 'serviceArns' --output json",
+            returnStdout: true
+        ).trim()
+
+        def services = new JsonSlurper().parseText(servicesJson)
+        def matchedServiceArn = services.find { it.toLowerCase().endsWith(activeServiceName.toLowerCase()) }
+
+        if (!matchedServiceArn) {
+            error "Active service '${activeServiceName}' not found in cluster ${config.ECS_CLUSTER}"
+        }
+
+        // Extract service name from ARN
+        def serviceName = matchedServiceArn.tokenize('/').last()
+
+        config.ACTIVE_SERVICE = serviceName
+        echo "✅ Dynamically determined ACTIVE_SERVICE: ${config.ACTIVE_SERVICE}"
+    }
 
     // Dynamically fetch IDLE_ENV and IDLE_TG_ARN if not provided
     if (!config.IDLE_ENV || !config.IDLE_TG_ARN) {
@@ -747,6 +776,5 @@ def scaleDownOldEnvironment(Map config) {
         throw e
     }
 }
-
 
 
