@@ -639,6 +639,7 @@ def switchTraffic(Map config) {
 }
 
 
+
 import groovy.json.JsonSlurper
 
 def scaleDownOldEnvironment(Map config) {
