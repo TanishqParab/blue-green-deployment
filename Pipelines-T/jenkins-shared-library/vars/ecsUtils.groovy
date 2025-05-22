@@ -652,10 +652,26 @@ def switchTraffic(Map config) {
 import groovy.json.JsonSlurper
 
 def scaleDownOldEnvironment(Map config) {
+    // Dynamically fetch ECS cluster if not provided
+    if (!config.ECS_CLUSTER) {
+        echo "⚙️ ECS_CLUSTER not set, fetching dynamically from Terraform output..."
+
+        def ecsClusterId = sh(
+            script: "terraform -chdir=/var/lib/jenkins/workspace/blue-green-deployment-job-ecs-switch-test/blue-green-deployment output -raw ecs_cluster_id",
+            returnStdout: true
+        ).trim()
+
+        if (!ecsClusterId) {
+            error "Failed to fetch ECS cluster ID dynamically"
+        }
+
+        config.ECS_CLUSTER = ecsClusterId
+        echo "✅ Dynamically fetched ECS_CLUSTER: ${config.ECS_CLUSTER}"
+    }
+
     echo "📉 Scaling down old environment (${config.ACTIVE_ENV})..."
 
     // Validate required parameters
-    if (!config.ECS_CLUSTER) error "ECS_CLUSTER is required"
     if (!config.ACTIVE_SERVICE) error "ACTIVE_SERVICE is required"
     if (!config.ACTIVE_ENV) error "ACTIVE_ENV is required"
 
@@ -663,14 +679,12 @@ def scaleDownOldEnvironment(Map config) {
     if (!config.IDLE_ENV || !config.IDLE_TG_ARN) {
         echo "⚙️ IDLE_ENV or IDLE_TG_ARN not set, fetching dynamically..."
 
-        // Fetch blue and green TG ARNs
         def blueTgArn = sh(script: "aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text", returnStdout: true).trim()
         def greenTgArn = sh(script: "aws elbv2 describe-target-groups --names green-tg --query 'TargetGroups[0].TargetGroupArn' --output text", returnStdout: true).trim()
 
         if (!blueTgArn || blueTgArn == 'None') error "Blue target group ARN not found"
         if (!greenTgArn || greenTgArn == 'None') error "Green target group ARN not found"
 
-        // Determine idle environment and TG ARN based on active TG ARN
         if (config.ACTIVE_ENV.toUpperCase() == "BLUE") {
             config.IDLE_ENV = "GREEN"
             config.IDLE_TG_ARN = greenTgArn
@@ -733,7 +747,6 @@ def scaleDownOldEnvironment(Map config) {
         throw e
     }
 }
-
 
 
 
