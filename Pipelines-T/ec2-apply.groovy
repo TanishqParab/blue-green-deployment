@@ -6,6 +6,6 @@
 ec2Pipeline([
     tfWorkingDir: "/var/lib/jenkins/workspace/blue-green-deployment-job-apply/blue-green-deployment-ec2",
     emailRecipient: "tanishqparab2001@gmail.com",
-    sshKeyId: "blue-green-key"
+    sshKeyId: "blue-green-key",
     varFile: "terraform.tfvars"
 ])
