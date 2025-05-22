@@ -669,9 +669,52 @@ def scaleDownOldEnvironment(Map config) {
         echo "✅ Dynamically fetched ECS_CLUSTER: ${config.ECS_CLUSTER}"
     }
 
-    // Validate ACTIVE_ENV presence before usage
+    // Dynamically determine ACTIVE_ENV if not provided
     if (!config.ACTIVE_ENV) {
-        error "ACTIVE_ENV is required"
+        echo "⚙️ ACTIVE_ENV not set, fetching dynamically from ALB listener..."
+
+        if (!config.LISTENER_ARN) {
+            error "LISTENER_ARN is required to fetch ACTIVE_ENV dynamically"
+        }
+
+        // Fetch active target group ARN with weight=1 (live traffic)
+        def activeTgArn = sh(
+            script: """
+            aws elbv2 describe-listeners --listener-arns ${config.LISTENER_ARN} \
+            --query 'Listeners[0].DefaultActions[0].ForwardConfig.TargetGroups[?Weight==\`1\`].TargetGroupArn | [0]' \
+            --output text
+            """,
+            returnStdout: true
+        ).trim()
+
+        if (!activeTgArn || activeTgArn == 'None') {
+            error "Failed to fetch active target group ARN from listener"
+        }
+
+        // Fetch blue and green target group ARNs
+        def blueTgArn = sh(
+            script: "aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text",
+            returnStdout: true
+        ).trim()
+
+        def greenTgArn = sh(
+            script: "aws elbv2 describe-target-groups --names green-tg --query 'TargetGroups[0].TargetGroupArn' --output text",
+            returnStdout: true
+        ).trim()
+
+        if (!blueTgArn || blueTgArn == 'None' || !greenTgArn || greenTgArn == 'None') {
+            error "Failed to fetch blue or green target group ARNs"
+        }
+
+        if (activeTgArn == blueTgArn) {
+            config.ACTIVE_ENV = "BLUE"
+        } else if (activeTgArn == greenTgArn) {
+            config.ACTIVE_ENV = "GREEN"
+        } else {
+            error "Active target group ARN does not match blue or green target groups"
+        }
+
+        echo "✅ Dynamically determined ACTIVE_ENV: ${config.ACTIVE_ENV}"
     }
 
     echo "📉 Scaling down old environment (${config.ACTIVE_ENV})..."
@@ -783,5 +826,6 @@ def scaleDownOldEnvironment(Map config) {
         throw e
     }
 }
+
 
 
