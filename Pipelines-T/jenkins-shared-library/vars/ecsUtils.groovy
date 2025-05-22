@@ -614,13 +614,18 @@ def switchTraffic(Map config) {
             [TargetGroupArn: activeTgArn, Weight: 0]
         ]
 
-        def forwardConfig = [TargetGroups: targetGroups]
+        def forwardAction = [
+            [
+                Type: "forward",
+                ForwardConfig: [
+                    TargetGroups: targetGroups
+                ]
+            ]
+        ]
+
         def jsonFile = 'forward-config.json'
+        writeFile file: jsonFile, text: JsonOutput.prettyPrint(JsonOutput.toJson(forwardAction))
 
-        // Write JSON to a file
-        writeFile file: jsonFile, text: JsonOutput.prettyPrint(JsonOutput.toJson(forwardConfig))
-
-        // Use file:// syntax to pass JSON file to AWS CLI
         sh """
         aws elbv2 modify-listener \
           --listener-arn ${listenerArn} \
