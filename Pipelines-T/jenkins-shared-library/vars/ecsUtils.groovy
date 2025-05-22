@@ -652,7 +652,7 @@ def switchTraffic(Map config) {
 import groovy.json.JsonSlurper
 
 def scaleDownOldEnvironment(Map config) {
-    // Dynamically fetch ECS cluster if not provided
+    // --- Fetch ECS Cluster dynamically if not provided ---
     if (!config.ECS_CLUSTER) {
         echo "⚙️ ECS_CLUSTER not set, fetching dynamically from Terraform output..."
 
@@ -669,13 +669,57 @@ def scaleDownOldEnvironment(Map config) {
         echo "✅ Dynamically fetched ECS_CLUSTER: ${config.ECS_CLUSTER}"
     }
 
-    // Dynamically determine ACTIVE_ENV if not provided
+    // --- Fetch ALB ARN dynamically if not provided ---
+    if (!config.ALB_ARN) {
+        echo "⚙️ ALB_ARN not set, fetching dynamically..."
+
+        def albArn = sh(
+            script: "aws elbv2 describe-load-balancers --names blue-green-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text",
+            returnStdout: true
+        ).trim()
+
+        if (!albArn || albArn == 'None') {
+            error "Failed to fetch ALB ARN"
+        }
+
+        config.ALB_ARN = albArn
+        echo "✅ Dynamically fetched ALB_ARN: ${config.ALB_ARN}"
+    }
+
+    // --- Fetch Listener ARN dynamically if not provided ---
+    if (!config.LISTENER_ARN) {
+        echo "⚙️ LISTENER_ARN not set, fetching dynamically..."
+
+        def listenerArn = sh(
+            script: "aws elbv2 describe-listeners --load-balancer-arn ${config.ALB_ARN} --query 'Listeners[0].ListenerArn' --output text",
+            returnStdout: true
+        ).trim()
+
+        if (!listenerArn || listenerArn == 'None') {
+            error "Failed to fetch Listener ARN"
+        }
+
+        config.LISTENER_ARN = listenerArn
+        echo "✅ Dynamically fetched LISTENER_ARN: ${config.LISTENER_ARN}"
+    }
+
+    // --- Fetch Blue and Green Target Group ARNs dynamically ---
+    def blueTgArn = sh(
+        script: "aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text",
+        returnStdout: true
+    ).trim()
+
+    def greenTgArn = sh(
+        script: "aws elbv2 describe-target-groups --names green-tg --query 'TargetGroups[0].TargetGroupArn' --output text",
+        returnStdout: true
+    ).trim()
+
+    if (!blueTgArn || blueTgArn == 'None') error "Blue target group ARN not found"
+    if (!greenTgArn || greenTgArn == 'None') error "Green target group ARN not found"
+
+    // --- Determine ACTIVE_ENV dynamically if not provided ---
     if (!config.ACTIVE_ENV) {
         echo "⚙️ ACTIVE_ENV not set, fetching dynamically from ALB listener..."
-
-        if (!config.LISTENER_ARN) {
-            error "LISTENER_ARN is required to fetch ACTIVE_ENV dynamically"
-        }
 
         // Fetch active target group ARN with weight=1 (live traffic)
         def activeTgArn = sh(
@@ -685,21 +729,6 @@ def scaleDownOldEnvironment(Map config) {
 
         if (!activeTgArn || activeTgArn == 'None') {
             error "Failed to fetch active target group ARN from listener"
-        }
-
-        // Fetch blue and green target group ARNs
-        def blueTgArn = sh(
-            script: "aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text",
-            returnStdout: true
-        ).trim()
-
-        def greenTgArn = sh(
-            script: "aws elbv2 describe-target-groups --names green-tg --query 'TargetGroups[0].TargetGroupArn' --output text",
-            returnStdout: true
-        ).trim()
-
-        if (!blueTgArn || blueTgArn == 'None' || !greenTgArn || greenTgArn == 'None') {
-            error "Failed to fetch blue or green target group ARNs"
         }
 
         if (activeTgArn == blueTgArn) {
@@ -713,51 +742,8 @@ def scaleDownOldEnvironment(Map config) {
         echo "✅ Dynamically determined ACTIVE_ENV: ${config.ACTIVE_ENV}"
     }
 
-    echo "📉 Scaling down old environment (${config.ACTIVE_ENV})..."
-
-    // Dynamically determine ACTIVE_SERVICE if not provided
-    if (!config.ACTIVE_SERVICE) {
-        echo "⚙️ ACTIVE_SERVICE not set, determining dynamically based on ACTIVE_ENV..."
-
-        def activeEnvLower = config.ACTIVE_ENV.toLowerCase()
-        def expectedServiceName = "${activeEnvLower}-service"
-
-        // List ECS services in the cluster
-        def servicesJson = sh(
-            script: "aws ecs list-services --cluster ${config.ECS_CLUSTER} --query 'serviceArns' --output json",
-            returnStdout: true
-        ).trim()
-
-        def services = new JsonSlurper().parseText(servicesJson)
-
-        if (!services || services.isEmpty()) {
-            error "No ECS services found in cluster ${config.ECS_CLUSTER}"
-        }
-
-        // Find service ARN that ends with expected service name (case-insensitive)
-        def matchedServiceArn = services.find { it.toLowerCase().endsWith(expectedServiceName.toLowerCase()) }
-
-        if (!matchedServiceArn) {
-            error "Active service '${expectedServiceName}' not found in cluster ${config.ECS_CLUSTER}"
-        }
-
-        // Extract service name from ARN (last token after '/')
-        def serviceName = matchedServiceArn.tokenize('/').last()
-
-        config.ACTIVE_SERVICE = serviceName
-        echo "✅ Dynamically determined ACTIVE_SERVICE: ${config.ACTIVE_SERVICE}"
-    }
-
-    // Dynamically fetch IDLE_ENV and IDLE_TG_ARN if not provided
+    // --- Determine IDLE_ENV and IDLE_TG_ARN based on ACTIVE_ENV ---
     if (!config.IDLE_ENV || !config.IDLE_TG_ARN) {
-        echo "⚙️ IDLE_ENV or IDLE_TG_ARN not set, fetching dynamically..."
-
-        def blueTgArn = sh(script: "aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text", returnStdout: true).trim()
-        def greenTgArn = sh(script: "aws elbv2 describe-target-groups --names green-tg --query 'TargetGroups[0].TargetGroupArn' --output text", returnStdout: true).trim()
-
-        if (!blueTgArn || blueTgArn == 'None') error "Blue target group ARN not found"
-        if (!greenTgArn || greenTgArn == 'None') error "Green target group ARN not found"
-
         if (config.ACTIVE_ENV.toUpperCase() == "BLUE") {
             config.IDLE_ENV = "GREEN"
             config.IDLE_TG_ARN = greenTgArn
@@ -772,7 +758,37 @@ def scaleDownOldEnvironment(Map config) {
         echo "✅ Dynamically determined IDLE_TG_ARN: ${config.IDLE_TG_ARN}"
     }
 
-    // --- Wait for new target group health before scaling down ---
+    // --- Dynamically determine ACTIVE_SERVICE if not provided ---
+    if (!config.ACTIVE_SERVICE) {
+        echo "⚙️ ACTIVE_SERVICE not set, determining dynamically based on ACTIVE_ENV..."
+
+        def activeEnvLower = config.ACTIVE_ENV.toLowerCase()
+        def expectedServiceName = "${activeEnvLower}-service"
+
+        def servicesJson = sh(
+            script: "aws ecs list-services --cluster ${config.ECS_CLUSTER} --query 'serviceArns' --output json",
+            returnStdout: true
+        ).trim()
+
+        def services = new JsonSlurper().parseText(servicesJson)
+
+        if (!services || services.isEmpty()) {
+            error "No ECS services found in cluster ${config.ECS_CLUSTER}"
+        }
+
+        def matchedServiceArn = services.find { it.toLowerCase().endsWith(expectedServiceName.toLowerCase()) }
+
+        if (!matchedServiceArn) {
+            error "Active service '${expectedServiceName}' not found in cluster ${config.ECS_CLUSTER}"
+        }
+
+        def serviceName = matchedServiceArn.tokenize('/').last()
+
+        config.ACTIVE_SERVICE = serviceName
+        echo "✅ Dynamically determined ACTIVE_SERVICE: ${config.ACTIVE_SERVICE}"
+    }
+
+    // --- Wait for all targets in idle target group to be healthy ---
     int maxAttempts = 30
     int attempt = 0
     int healthyCount = 0
@@ -801,7 +817,7 @@ def scaleDownOldEnvironment(Map config) {
         error "❌ No healthy targets in ${config.IDLE_ENV} TG after waiting."
     }
 
-    // --- Now scale down old environment ---
+    // --- Scale down the active ECS service ---
     try {
         sh """
         aws ecs update-service \
@@ -822,6 +838,7 @@ def scaleDownOldEnvironment(Map config) {
         throw e
     }
 }
+
 
 
 
