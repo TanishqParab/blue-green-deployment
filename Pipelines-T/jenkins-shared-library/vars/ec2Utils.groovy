@@ -78,7 +78,7 @@ def detectChanges(Map config) {
     def changedFiles = sh(script: "git diff --name-only HEAD~1 HEAD", returnStdout: true).trim().split('\n')
     echo "Changed files: ${changedFiles}"
 
-    def onlyAppChange = (changedFiles.length == 1 && changedFiles[0] == "blue-green-deployment/modules/ec2/scripts/app.py")
+    def onlyAppChange = (changedFiles.length == 1 && changedFiles[0] == "blue-green-deployment-ec2/modules/ec2/scripts/app.py")
 
     if (onlyAppChange) {
         echo "🚀 Detected only app.py change, executing App Deploy."
