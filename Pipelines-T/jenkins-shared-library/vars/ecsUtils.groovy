@@ -577,6 +577,7 @@ def switchTraffic(Map config) {
     echo "🔄 Dynamically fetching target groups and switching traffic..."
 
     try {
+        // Fetch ARNs of blue and green target groups
         def blueTgArn = sh(script: "aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text", returnStdout: true).trim()
         def greenTgArn = sh(script: "aws elbv2 describe-target-groups --names green-tg --query 'TargetGroups[0].TargetGroupArn' --output text", returnStdout: true).trim()
 
@@ -586,6 +587,7 @@ def switchTraffic(Map config) {
         def listenerArn = config.LISTENER_ARN
         if (!listenerArn) error "Listener ARN must be provided"
 
+        // Get current active target group ARN from listener
         def currentTgArn = sh(script: """
             aws elbv2 describe-listeners --listener-arns ${listenerArn} \
             --query 'Listeners[0].DefaultActions[0].ForwardConfig.TargetGroups[0].TargetGroupArn || Listeners[0].DefaultActions[0].TargetGroupArn' \
@@ -609,14 +611,16 @@ def switchTraffic(Map config) {
 
         echo "Switching traffic from ${activeEnv} to ${idleEnv}"
 
+        // Build the target groups JSON for weighted forwarding
         def targetGroups = [
             [TargetGroupArn: idleTgArn, Weight: 1],
             [TargetGroupArn: activeTgArn, Weight: 0]
         ]
 
-        // Convert to JSON string and escape quotes for shell
+        // Convert to JSON string and escape quotes for shell command
         def targetGroupsJson = JsonOutput.toJson(targetGroups).replace('"', '\\"')
 
+        // Run AWS CLI command with properly escaped JSON
         sh """
         aws elbv2 modify-listener \
           --listener-arn ${listenerArn} \
@@ -637,6 +641,7 @@ def switchTraffic(Map config) {
         throw e
     }
 }
+
 
 
 
