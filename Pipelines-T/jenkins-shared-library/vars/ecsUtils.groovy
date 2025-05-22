@@ -679,11 +679,7 @@ def scaleDownOldEnvironment(Map config) {
 
         // Fetch active target group ARN with weight=1 (live traffic)
         def activeTgArn = sh(
-            script: """
-            aws elbv2 describe-listeners --listener-arns ${config.LISTENER_ARN} \
-            --query 'Listeners[0].DefaultActions[0].ForwardConfig.TargetGroups[?Weight==\`1\`].TargetGroupArn | [0]' \
-            --output text
-            """,
+            script: 'aws elbv2 describe-listeners --listener-arns ' + config.LISTENER_ARN + ' --query \'Listeners[0].DefaultActions[0].ForwardConfig.TargetGroups[?Weight==`1`].TargetGroupArn | [0]\' --output text',
             returnStdout: true
         ).trim()
 
