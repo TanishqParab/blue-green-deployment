@@ -629,10 +629,11 @@ def scaleDownOldEnvironment(Map config) {
         def targetGroupsJson = sh(script: "aws elbv2 describe-target-groups --load-balancer-arn ${albArn} --query 'TargetGroups[*].[TargetGroupArn, TargetGroupName]' --output json", returnStdout: true).trim()
         def targetGroups = parseJsonNonCPS(targetGroupsJson)
         echo "🔍 Target Groups found:"
-        targetGroups.each { echo " - Name: ${it[1]}, ARN: ${it[0]}" }
+        targetGroups.each { echo " - Name: '${it[1]}', ARN: ${it[0]}" }
 
-        def blueTgArn = targetGroups.find { it[1].toLowerCase() == 'blue-tg' }?.getAt(0)
-        def greenTgArn = targetGroups.find { it[1].toLowerCase() == 'green-tg' }?.getAt(0)
+        // Trim and lowercase target group names for safe matching
+        def blueTgArn = targetGroups.find { it[1]?.trim()?.toLowerCase() == 'blue-tg' }?.getAt(0)
+        def greenTgArn = targetGroups.find { it[1]?.trim()?.toLowerCase() == 'green-tg' }?.getAt(0)
         if (!blueTgArn || !greenTgArn) error "❌ Could not find both Blue and Green target groups in ALB ${albArn}"
         echo "✅ Blue TG ARN: ${blueTgArn}"
         echo "✅ Green TG ARN: ${greenTgArn}"
@@ -640,11 +641,12 @@ def scaleDownOldEnvironment(Map config) {
         def idleTgArn = (liveTgArn == blueTgArn) ? greenTgArn : blueTgArn
         echo "✅ Idle (previously live) Target Group ARN: ${idleTgArn}"
 
-        def targetIds = sh(script: "aws elbv2 describe-target-health --target-group-arn ${idleTgArn} --query 'TargetHealthDescriptions[].Target.Id' --output text", returnStdout: true).trim()
-        if (!targetIds || targetIds.isEmpty()) {
+        def targetIdsText = sh(script: "aws elbv2 describe-target-health --target-group-arn ${idleTgArn} --query 'TargetHealthDescriptions[].Target.Id' --output text", returnStdout: true).trim()
+        if (!targetIdsText) {
             echo "⚠️ No targets found in the idle target group. Nothing to scale down."
             return
         }
+        def targetIds = targetIdsText.tokenize()
         echo "✅ Target IDs in idle TG: ${JsonOutput.toJson(targetIds)}"
 
         def ecsCluster = sh(script: "aws ecs list-clusters --query 'clusterArns[0]' --output text", returnStdout: true).trim()
@@ -673,14 +675,12 @@ def scaleDownOldEnvironment(Map config) {
             int attempts = 0
             while (attempts < 3) {
                 def taskArnsJson = sh(script: "aws ecs list-tasks --cluster ${ecsCluster} --service-name ${serviceName} --output json", returnStdout: true).trim()
-                
                 if (!taskArnsJson || !(taskArnsJson.startsWith("{") || taskArnsJson.startsWith("["))) {
                     echo "⚠️ Invalid or empty JSON from list-tasks for service ${serviceName}, retrying (${attempts + 1}/3)..."
                     attempts++
                     sleep 5
                     continue
                 }
-                
                 taskArns = parseJsonNonCPS(taskArnsJson)?.taskArns ?: []
                 if (taskArns) break
                 attempts++
@@ -694,9 +694,7 @@ def scaleDownOldEnvironment(Map config) {
             }
 
             for (taskId in taskArns) {
-                
                 def eniId = sh(script: "aws ecs describe-tasks --cluster ${ecsCluster} --tasks ${taskId} --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text", returnStdout: true).trim()
-                
                 if (!eniId) {
                     echo "⚠️ No ENI ID found in attachment details for task ${taskId}, skipping."
                     continue
