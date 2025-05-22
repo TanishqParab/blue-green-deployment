@@ -571,39 +571,28 @@ def testEnvironment(Map config) {
 
 
 
-import groovy.json.JsonSlurper
 import groovy.json.JsonOutput
 
 def switchTraffic(Map config) {
     echo "🔄 Dynamically fetching target groups and switching traffic..."
 
     try {
-        // Fetch listener ARN and ALB ARN from config or environment
-        def listenerArn = config.LISTENER_ARN
-        if (!listenerArn) error "Listener ARN must be provided in config"
-
-        // Fetch target group ARNs for blue and green by name
         def blueTgArn = sh(script: "aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text", returnStdout: true).trim()
         def greenTgArn = sh(script: "aws elbv2 describe-target-groups --names green-tg --query 'TargetGroups[0].TargetGroupArn' --output text", returnStdout: true).trim()
 
         if (!blueTgArn || blueTgArn == 'None') error "Blue target group ARN not found"
         if (!greenTgArn || greenTgArn == 'None') error "Green target group ARN not found"
 
-        echo "✅ Blue TG ARN: ${blueTgArn}"
-        echo "✅ Green TG ARN: ${greenTgArn}"
+        def listenerArn = config.LISTENER_ARN
+        if (!listenerArn) error "Listener ARN must be provided"
 
-        // Fetch current active TG ARN from listener default action
         def currentTgArn = sh(script: """
             aws elbv2 describe-listeners --listener-arns ${listenerArn} \
             --query 'Listeners[0].DefaultActions[0].ForwardConfig.TargetGroups[0].TargetGroupArn || Listeners[0].DefaultActions[0].TargetGroupArn' \
             --output text
         """, returnStdout: true).trim()
 
-        echo "Current active target group ARN: ${currentTgArn}"
-
-        // Determine idle and active TG ARNs and environment names
         def activeTgArn, idleTgArn, activeEnv, idleEnv
-
         if (currentTgArn == blueTgArn) {
             activeTgArn = blueTgArn
             idleTgArn = greenTgArn
@@ -620,24 +609,22 @@ def switchTraffic(Map config) {
 
         echo "Switching traffic from ${activeEnv} to ${idleEnv}"
 
-        // Build weighted target groups JSON
         def targetGroups = [
             [TargetGroupArn: idleTgArn, Weight: 1],
             [TargetGroupArn: activeTgArn, Weight: 0]
         ]
 
+        // Convert to JSON string and escape quotes for shell
         def targetGroupsJson = JsonOutput.toJson(targetGroups).replace('"', '\\"')
 
-        // Switch traffic using weighted forward config
         sh """
         aws elbv2 modify-listener \
           --listener-arn ${listenerArn} \
           --default-actions Type=forward,ForwardConfig={\\"TargetGroups\\":${targetGroupsJson}}
         """
 
-        echo "✅ Traffic switched to ${idleEnv} (idle TG receives 100%, active TG 0%)"
+        echo "✅ Traffic switched to ${idleEnv}"
 
-        // Return info for downstream stages
         return [
             ACTIVE_TG_ARN: activeTgArn,
             IDLE_TG_ARN: idleTgArn,
