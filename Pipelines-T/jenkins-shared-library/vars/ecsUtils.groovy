@@ -574,170 +574,72 @@ def switchTraffic(Map config) {
     echo "🔄 Switching traffic to ${config.IDLE_ENV}"
 
     try {
-        // Switch 100% traffic to the idle environment
+        // Attach both TGs with 100% traffic to idle (new), 0% to active (old)
         sh """
-        aws elbv2 modify-listener --listener-arn ${config.LISTENER_ARN} --default-actions Type=forward,TargetGroupArn=${config.IDLE_TG_ARN}
+        aws elbv2 modify-listener \
+          --listener-arn ${config.LISTENER_ARN} \
+          --default-actions 'Type=forward,ForwardConfig={\"TargetGroups\":[{\"TargetGroupArn\":\"${config.IDLE_TG_ARN}\",\"Weight\":1},{\"TargetGroupArn\":\"${config.ACTIVE_TG_ARN}\",\"Weight\":0}]}'
         """
-
-        echo "✅ Traffic switched 100% to ${config.IDLE_ENV}"
-
-        // Remove the test rule if it exists
-        sh """
-        TEST_RULE=\$(aws elbv2 describe-rules --listener-arn ${config.LISTENER_ARN} --query "Rules[?Priority=='10'].RuleArn" --output text)
-        
-        if [ ! -z "\$TEST_RULE" ]; then
-            aws elbv2 delete-rule --rule-arn \$TEST_RULE
-        fi
-        """
-
-        // Verify the traffic distribution
-        def currentConfig = sh(
-            script: """
-            aws elbv2 describe-listeners --listener-arns ${config.LISTENER_ARN} --query 'Listeners[0].DefaultActions[0]' --output json
-            """,
-            returnStdout: true
-        ).trim()
-
-        echo "Current listener configuration: ${currentConfig}"
-        echo "✅✅✅ Traffic switching completed successfully!"
+        echo "✅ Traffic switched 100% to ${config.IDLE_ENV} (old env still attached for rollback)"
     } catch (Exception e) {
-        error "Failed to switch traffic: ${e.message}"
+        echo "❌ Error during traffic switch: ${e.message}"
+        throw e
     }
 }
 
 
-import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
 
 def scaleDownOldEnvironment(Map config) {
-    echo "📉 Dynamically scaling down old environment (previously live ECS service)..."
+    echo "📉 Scaling down old environment (${config.ACTIVE_ENV})..."
 
-    try {
-        def albName = config.ALB_NAME ?: 'blue-green-alb'
+    // --- Wait for new target group health before scaling down ---
+    int maxAttempts = 30
+    int attempt = 0
+    int healthyCount = 0
 
-        def albArn = sh(script: "aws elbv2 describe-load-balancers --names ${albName} --query 'LoadBalancers[0].LoadBalancerArn' --output text", returnStdout: true).trim()
-        if (!albArn || albArn == 'None') error "❌ Could not find ALB ARN for name: ${albName}"
-        echo "✅ Found ALB ARN: ${albArn}"
+    echo "⏳ Waiting for all targets in ${config.IDLE_ENV} TG to become healthy before scaling down old environment..."
+    while (attempt < maxAttempts) {
+        def healthJson = sh(
+            script: "aws elbv2 describe-target-health --target-group-arn ${config.IDLE_TG_ARN} --query 'TargetHealthDescriptions[*].TargetHealth.State' --output json",
+            returnStdout: true
+        ).trim()
+        def states = new JsonSlurper().parseText(healthJson)
+        healthyCount = states.count { it == "healthy" }
+        echo "Healthy targets: ${healthyCount} / ${states.size()}"
 
-        def listenerArn = sh(script: "aws elbv2 describe-listeners --load-balancer-arn ${albArn} --query \"Listeners[?DefaultActions[0].Type=='forward'].[ListenerArn]\" --output text", returnStdout: true).trim()
-        if (!listenerArn) error "❌ Listener ARN could not be determined from ALB ${albArn}"
-        echo "✅ Found Listener ARN: ${listenerArn}"
-
-        def liveTgArn = sh(script: "aws elbv2 describe-rules --listener-arn ${listenerArn} --query \"Rules[?Priority=='1' || Priority=='default'].Actions[0].TargetGroupArn\" --output text", returnStdout: true).trim()
-        if (!liveTgArn) error "❌ Live target group ARN could not be determined from listener rules"
-        echo "✅ Live Target Group ARN: ${liveTgArn}"
-
-        def targetGroupsJson = sh(script: "aws elbv2 describe-target-groups --load-balancer-arn ${albArn} --query 'TargetGroups[*].[TargetGroupArn, TargetGroupName]' --output json", returnStdout: true).trim()
-        def targetGroups = parseJsonNonCPS(targetGroupsJson)
-        echo "🔍 Target Groups found:"
-        targetGroups.each { echo " - Name: '${it[1]}', ARN: ${it[0]}" }
-
-        // Trim and lowercase target group names for safe matching
-        def blueTgArn = targetGroups.find { it[1]?.trim()?.toLowerCase() == 'blue-tg' }?.getAt(0)
-        def greenTgArn = targetGroups.find { it[1]?.trim()?.toLowerCase() == 'green-tg' }?.getAt(0)
-        if (!blueTgArn || !greenTgArn) error "❌ Could not find both Blue and Green target groups in ALB ${albArn}"
-        echo "✅ Blue TG ARN: ${blueTgArn}"
-        echo "✅ Green TG ARN: ${greenTgArn}"
-
-        def idleTgArn = (liveTgArn == blueTgArn) ? greenTgArn : blueTgArn
-        echo "✅ Idle (previously live) Target Group ARN: ${idleTgArn}"
-
-        def targetIdsText = sh(script: "aws elbv2 describe-target-health --target-group-arn ${idleTgArn} --query 'TargetHealthDescriptions[].Target.Id' --output text", returnStdout: true).trim()
-        if (!targetIdsText) {
-            echo "⚠️ No targets found in the idle target group. Nothing to scale down."
-            return
+        if (states && healthyCount == states.size()) {
+            echo "✅ All targets in ${config.IDLE_ENV} TG are healthy."
+            break
         }
-        def targetIds = targetIdsText.tokenize()
-        echo "✅ Target IDs in idle TG: ${JsonOutput.toJson(targetIds)}"
-
-        def ecsCluster = sh(script: "aws ecs list-clusters --query 'clusterArns[0]' --output text", returnStdout: true).trim()
-        if (!ecsCluster || ecsCluster == 'None') error "❌ No ECS cluster found"
-        echo "✅ ECS Cluster ARN: ${ecsCluster}"
-
-        def servicesRaw = sh(script: "aws ecs list-services --cluster ${ecsCluster} --output text", returnStdout: true).trim()
-        echo "Raw ECS services output:\n${servicesRaw}"
-
-        def services = servicesRaw.tokenize().findAll { !it.startsWith('SERVICEARNS') }
-        if (!services) {
-            echo "⚠️ No ECS services found in cluster ${ecsCluster}. Skipping scale down."
-            return
-        }
-        echo "Filtered ECS services:"
-        services.each { echo " - ${it}" }
-
-        def idleService = null
-
-        outerLoop:
-        for (serviceArn in services) {
-            def serviceName = serviceArn.tokenize('/').last()
-            echo "Checking service: ${serviceName}"
-
-            def taskArns = []
-            int attempts = 0
-            while (attempts < 3) {
-                def taskArnsJson = sh(script: "aws ecs list-tasks --cluster ${ecsCluster} --service-name ${serviceName} --output json", returnStdout: true).trim()
-                if (!taskArnsJson || !(taskArnsJson.startsWith("{") || taskArnsJson.startsWith("["))) {
-                    echo "⚠️ Invalid or empty JSON from list-tasks for service ${serviceName}, retrying (${attempts + 1}/3)..."
-                    attempts++
-                    sleep 5
-                    continue
-                }
-                taskArns = parseJsonNonCPS(taskArnsJson)?.taskArns ?: []
-                if (taskArns) break
-                attempts++
-                echo "No tasks found for service ${serviceName}, retrying (${attempts}/3)..."
-                sleep 5
-            }
-
-            if (!taskArns) {
-                echo "No tasks found for service ${serviceName}, skipping."
-                continue
-            }
-
-            for (taskId in taskArns) {
-                def eniId = sh(script: "aws ecs describe-tasks --cluster ${ecsCluster} --tasks ${taskId} --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text", returnStdout: true).trim()
-                if (!eniId) {
-                    echo "⚠️ No ENI ID found in attachment details for task ${taskId}, skipping."
-                    continue
-                }
-
-                def privateIp = ''
-                try {
-                    privateIp = sh(script: "aws ec2 describe-network-interfaces --network-interface-ids ${eniId} --query 'NetworkInterfaces[0].PrivateIpAddress' --output text", returnStdout: true).trim()
-                    echo "Task ${taskId} ENI ${eniId} IP: ${privateIp}"
-                } catch (Exception ex) {
-                    echo "⚠️ Failed to get private IP for ENI ${eniId}: ${ex.message}"
-                    continue
-                }
-
-                if (targetIds.contains(privateIp) || targetIds.contains(eniId)) {
-                    idleService = serviceName
-                    echo "✅ Match found for service ${serviceName} with target ID ${privateIp}"
-                    break outerLoop
-                }
-            }
-        }
-
-        if (!idleService) {
-            error "❌ Could not map target group to any ECS service. Scale-down aborted."
-        }
-
-        echo "✅ Idle ECS service to scale down: ${idleService}"
-
-        sh "aws ecs update-service --cluster ${ecsCluster} --service ${idleService} --desired-count 0"
-        echo "✅ Successfully scaled down ${idleService}"
-
-        sh "aws ecs wait services-stable --cluster ${ecsCluster} --services ${idleService}"
-        echo "✅ Service is now stable"
-
-    } catch (Exception e) {
-        echo "⚠️ Error during scale down: ${e.message}"
-        echo "⚠️ Continuing pipeline despite error"
+        attempt++
+        sleep 10
     }
-}
 
-@NonCPS
-def parseJsonNonCPS(String text) {
-    return new groovy.json.JsonSlurper().parseText(text)
+    if (healthyCount == 0) {
+        error "❌ No healthy targets in ${config.IDLE_ENV} TG after waiting."
+    }
+
+    // --- Now scale down old environment ---
+    try {
+        sh """
+        aws ecs update-service \
+          --cluster ${config.ECS_CLUSTER} \
+          --service ${config.ACTIVE_SERVICE} \
+          --desired-count 0
+        """
+        echo "✅ Scaled down ${config.ACTIVE_SERVICE}"
+
+        sh """
+        aws ecs wait services-stable \
+          --cluster ${config.ECS_CLUSTER} \
+          --services ${config.ACTIVE_SERVICE}
+        """
+        echo "✅ ${config.ACTIVE_SERVICE} is now stable (scaled down)"
+    } catch (Exception e) {
+        echo "❌ Error during scale down: ${e.message}"
+        throw e
+    }
 }
 
 
