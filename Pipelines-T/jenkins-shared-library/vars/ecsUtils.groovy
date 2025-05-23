@@ -655,16 +655,13 @@ def scaleDownOldEnvironment(Map config) {
     // --- Fetch ECS Cluster dynamically if not provided ---
     if (!config.ECS_CLUSTER) {
         echo "⚙️ ECS_CLUSTER not set, fetching dynamically from Terraform output..."
-
         def ecsClusterId = sh(
             script: "terraform -chdir=/var/lib/jenkins/workspace/blue-green-deployment-job-ecs-switch-test/blue-green-deployment output -raw ecs_cluster_id",
             returnStdout: true
         ).trim()
-
         if (!ecsClusterId) {
             error "Failed to fetch ECS cluster ID dynamically"
         }
-
         config.ECS_CLUSTER = ecsClusterId
         echo "✅ Dynamically fetched ECS_CLUSTER: ${config.ECS_CLUSTER}"
     }
@@ -672,16 +669,13 @@ def scaleDownOldEnvironment(Map config) {
     // --- Fetch ALB ARN dynamically if not provided ---
     if (!config.ALB_ARN) {
         echo "⚙️ ALB_ARN not set, fetching dynamically..."
-
         def albArn = sh(
             script: "aws elbv2 describe-load-balancers --names blue-green-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text",
             returnStdout: true
         ).trim()
-
         if (!albArn || albArn == 'None') {
             error "Failed to fetch ALB ARN"
         }
-
         config.ALB_ARN = albArn
         echo "✅ Dynamically fetched ALB_ARN: ${config.ALB_ARN}"
     }
@@ -689,16 +683,13 @@ def scaleDownOldEnvironment(Map config) {
     // --- Fetch Listener ARN dynamically if not provided ---
     if (!config.LISTENER_ARN) {
         echo "⚙️ LISTENER_ARN not set, fetching dynamically..."
-
         def listenerArn = sh(
             script: "aws elbv2 describe-listeners --load-balancer-arn ${config.ALB_ARN} --query 'Listeners[0].ListenerArn' --output text",
             returnStdout: true
         ).trim()
-
         if (!listenerArn || listenerArn == 'None') {
             error "Failed to fetch Listener ARN"
         }
-
         config.LISTENER_ARN = listenerArn
         echo "✅ Dynamically fetched LISTENER_ARN: ${config.LISTENER_ARN}"
     }
@@ -708,29 +699,23 @@ def scaleDownOldEnvironment(Map config) {
         script: "aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text",
         returnStdout: true
     ).trim()
-
     def greenTgArn = sh(
         script: "aws elbv2 describe-target-groups --names green-tg --query 'TargetGroups[0].TargetGroupArn' --output text",
         returnStdout: true
     ).trim()
-
     if (!blueTgArn || blueTgArn == 'None') error "Blue target group ARN not found"
     if (!greenTgArn || greenTgArn == 'None') error "Green target group ARN not found"
 
     // --- Determine ACTIVE_ENV dynamically if not provided ---
     if (!config.ACTIVE_ENV) {
         echo "⚙️ ACTIVE_ENV not set, fetching dynamically from ALB listener..."
-
-        // Fetch active target group ARN with weight=1 (live traffic)
         def activeTgArn = sh(
             script: 'aws elbv2 describe-listeners --listener-arns ' + config.LISTENER_ARN + ' --query \'Listeners[0].DefaultActions[0].ForwardConfig.TargetGroups[?Weight==`1`].TargetGroupArn | [0]\' --output text',
             returnStdout: true
         ).trim()
-
         if (!activeTgArn || activeTgArn == 'None') {
             error "Failed to fetch active target group ARN from listener"
         }
-
         if (activeTgArn == blueTgArn) {
             config.ACTIVE_ENV = "BLUE"
         } else if (activeTgArn == greenTgArn) {
@@ -738,7 +723,6 @@ def scaleDownOldEnvironment(Map config) {
         } else {
             error "Active target group ARN does not match blue or green target groups"
         }
-
         echo "✅ Dynamically determined ACTIVE_ENV: ${config.ACTIVE_ENV}"
     }
 
@@ -753,91 +737,78 @@ def scaleDownOldEnvironment(Map config) {
         } else {
             error "ACTIVE_ENV must be 'BLUE' or 'GREEN'"
         }
-
         echo "✅ Dynamically determined IDLE_ENV: ${config.IDLE_ENV}"
         echo "✅ Dynamically determined IDLE_TG_ARN: ${config.IDLE_TG_ARN}"
     }
 
-    // --- Dynamically determine ACTIVE_SERVICE if not provided ---
-    if (!config.ACTIVE_SERVICE) {
-        echo "⚙️ ACTIVE_SERVICE not set, determining dynamically based on ACTIVE_ENV..."
-
-        def activeEnvLower = config.ACTIVE_ENV.toLowerCase()
-        def expectedServiceName = "${activeEnvLower}-service"
-
+    // --- Dynamically determine IDLE_SERVICE (not ACTIVE_SERVICE!) ---
+    if (!config.IDLE_SERVICE) {
+        echo "⚙️ IDLE_SERVICE not set, determining dynamically based on IDLE_ENV..."
+        def idleEnvLower = config.IDLE_ENV.toLowerCase()
+        def expectedIdleServiceName = "${idleEnvLower}-service"
         def servicesJson = sh(
             script: "aws ecs list-services --cluster ${config.ECS_CLUSTER} --query 'serviceArns' --output json",
             returnStdout: true
         ).trim()
-
         def services = new JsonSlurper().parseText(servicesJson)
-
         if (!services || services.isEmpty()) {
             error "No ECS services found in cluster ${config.ECS_CLUSTER}"
         }
-
-        def matchedServiceArn = services.find { it.toLowerCase().endsWith(expectedServiceName.toLowerCase()) }
-
-        if (!matchedServiceArn) {
-            error "Active service '${expectedServiceName}' not found in cluster ${config.ECS_CLUSTER}"
+        def matchedIdleServiceArn = services.find { it.toLowerCase().endsWith(expectedIdleServiceName.toLowerCase()) }
+        if (!matchedIdleServiceArn) {
+            error "Idle service '${expectedIdleServiceName}' not found in cluster ${config.ECS_CLUSTER}"
         }
-
-        def serviceName = matchedServiceArn.tokenize('/').last()
-
-        config.ACTIVE_SERVICE = serviceName
-        echo "✅ Dynamically determined ACTIVE_SERVICE: ${config.ACTIVE_SERVICE}"
+        def idleServiceName = matchedIdleServiceArn.tokenize('/').last()
+        config.IDLE_SERVICE = idleServiceName
+        echo "✅ Dynamically determined IDLE_SERVICE: ${config.IDLE_SERVICE}"
     }
 
     // --- Wait for all targets in idle target group to be healthy ---
     int maxAttempts = 30
     int attempt = 0
     int healthyCount = 0
-
     echo "⏳ Waiting for all targets in ${config.IDLE_ENV} TG to become healthy before scaling down old environment..."
     while (attempt < maxAttempts) {
         def healthJson = sh(
             script: "aws elbv2 describe-target-health --target-group-arn ${config.IDLE_TG_ARN} --query 'TargetHealthDescriptions[*].TargetHealth.State' --output json",
             returnStdout: true
         ).trim()
-
         def states = new JsonSlurper().parseText(healthJson)
         healthyCount = states.count { it == "healthy" }
         echo "Healthy targets: ${healthyCount} / ${states.size()}"
-
         if (states && healthyCount == states.size()) {
             echo "✅ All targets in ${config.IDLE_ENV} TG are healthy."
             break
         }
-
         attempt++
         sleep 10
     }
-
     if (healthyCount == 0) {
         error "❌ No healthy targets in ${config.IDLE_ENV} TG after waiting."
     }
 
-    // --- Scale down the active ECS service ---
+    // --- Scale down the IDLE ECS service ---
     try {
         sh """
         aws ecs update-service \
           --cluster ${config.ECS_CLUSTER} \
-          --service ${config.ACTIVE_SERVICE} \
+          --service ${config.IDLE_SERVICE} \
           --desired-count 0
         """
-        echo "✅ Scaled down ${config.ACTIVE_SERVICE}"
+        echo "✅ Scaled down ${config.IDLE_SERVICE}"
 
         sh """
         aws ecs wait services-stable \
           --cluster ${config.ECS_CLUSTER} \
-          --services ${config.ACTIVE_SERVICE}
+          --services ${config.IDLE_SERVICE}
         """
-        echo "✅ ${config.ACTIVE_SERVICE} is now stable (scaled down)"
+        echo "✅ ${config.IDLE_SERVICE} is now stable (scaled down)"
     } catch (Exception e) {
         echo "❌ Error during scale down: ${e.message}"
         throw e
     }
 }
+
 
 
 
