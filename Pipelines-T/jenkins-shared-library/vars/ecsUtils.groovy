@@ -187,31 +187,33 @@ def fetchResources(Map config) {
 
 
 def ensureTargetGroupAssociation(Map config) {
-    echo "Ensuring target group is associated with load balancer..."
+    echo "Ensuring target group '${config.IDLE_ENV}' is associated with load balancer..."
 
-    if (!config.IDLE_TG_ARN || config.IDLE_TG_ARN.trim() == "") {
+    // Validate input parameters
+    if (!config.IDLE_TG_ARN?.trim()) {
         error "IDLE_TG_ARN is missing or empty"
     }
-    if (!config.LISTENER_ARN || config.LISTENER_ARN.trim() == "") {
+    if (!config.LISTENER_ARN?.trim()) {
         error "LISTENER_ARN is missing or empty"
     }
 
+    // Describe the target group to check if it's associated with any load balancer
     def targetGroupInfo = sh(
         script: """
-        aws elbv2 describe-target-groups --target-group-arns ${config.IDLE_TG_ARN} --query 'TargetGroups[0].LoadBalancerArns' --output json
+            aws elbv2 describe-target-groups --target-group-arns ${config.IDLE_TG_ARN} --query 'TargetGroups[0].LoadBalancerArns' --output json
         """,
         returnStdout: true
     ).trim()
 
-    // Use a @NonCPS helper for JSON parsing
     def targetGroupJson = parseJson(targetGroupInfo)
 
-    if (targetGroupJson.size() == 0) {
-        echo "⚠️ Target group ${config.IDLE_ENV} is not associated with a load balancer. Creating a path-based rule..."
+    if (!targetGroupJson || targetGroupJson.size() == 0) {
+        echo "⚠️ Target group '${config.IDLE_ENV}' is NOT associated with any load balancer. Creating a path-based listener rule..."
 
+        // Fetch existing listener rule priorities to find the next available priority
         def rulesJson = sh(
             script: """
-            aws elbv2 describe-rules --listener-arn ${config.LISTENER_ARN} --query 'Rules[*].Priority' --output json
+                aws elbv2 describe-rules --listener-arn ${config.LISTENER_ARN} --query 'Rules[*].Priority' --output json
             """,
             returnStdout: true
         ).trim()
@@ -223,6 +225,8 @@ def ensureTargetGroupAssociation(Map config) {
 
         int startPriority = 100
         int nextPriority = startPriority
+
+        // Find the lowest unused priority starting from 100
         for (p in priorities) {
             if (p == nextPriority) {
                 nextPriority++
@@ -232,18 +236,19 @@ def ensureTargetGroupAssociation(Map config) {
         }
         echo "Using rule priority: ${nextPriority}"
 
+        // Create a listener rule forwarding requests matching the path pattern to the target group
         sh """
-        aws elbv2 create-rule \
-            --listener-arn ${config.LISTENER_ARN} \
-            --priority ${nextPriority} \
-            --conditions '[{"Field":"path-pattern","Values":["/associate-tg*"]}]' \
-            --actions '[{"Type":"forward","TargetGroupArn":"${config.IDLE_TG_ARN}"}]'
+            aws elbv2 create-rule \
+                --listener-arn ${config.LISTENER_ARN} \
+                --priority ${nextPriority} \
+                --conditions '[{"Field":"path-pattern","Values":["/associate-tg*"]}]' \
+                --actions '[{"Type":"forward","TargetGroupArn":"${config.IDLE_TG_ARN}"}]'
         """
 
-        sleep(10)
-        echo "✅ Target group associated with load balancer via path rule (priority ${nextPriority})"
+        sleep(10) // Allow time for AWS to propagate the new rule
+        echo "✅ Target group '${config.IDLE_ENV}' associated with load balancer via path rule (priority ${nextPriority})"
     } else {
-        echo "✅ Target group is already associated with load balancer"
+        echo "✅ Target group '${config.IDLE_ENV}' is already associated with load balancer"
     }
 }
 
