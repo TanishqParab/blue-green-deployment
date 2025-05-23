@@ -499,6 +499,35 @@ def postRollbackActions(Map config) {
         """
         echo "✅ All services are stable"
 
+        // --- NEW: Switch ALB listener to rolled-back environment BEFORE ECR cleanup ---
+        echo "🔄 Switching ALB listener to rolled-back environment (${env.ROLLBACK_ENV})..."
+
+        def rollbackTgName = env.ROLLBACK_ENV.toLowerCase() + "-tg"
+        def rollbackTgArn = sh(
+            script: "aws elbv2 describe-target-groups --names ${rollbackTgName} --query 'TargetGroups[0].TargetGroupArn' --output text",
+            returnStdout: true
+        ).trim()
+
+        def forwardAction = [
+            [
+                Type: "forward",
+                ForwardConfig: [
+                    TargetGroups: [
+                        [TargetGroupArn: rollbackTgArn, Weight: 1]
+                    ]
+                ]
+            ]
+        ]
+        def jsonFile = 'rollback-forward-config.json'
+        writeFile file: jsonFile, text: groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(forwardAction))
+
+        sh """
+        aws elbv2 modify-listener \
+          --listener-arn ${env.LISTENER_ARN} \
+          --default-actions file://${jsonFile}
+        """
+        echo "✅ Switched ALB listener to ${rollbackTgName} after rollback"
+
         // Begin ECR cleanup
         echo "🧹 Cleaning up old images from ECR repository..."
 
