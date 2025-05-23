@@ -483,6 +483,9 @@ def executeEcsRollback(Map config) {
     }
 }
 
+import groovy.json.JsonSlurper
+import groovy.json.JsonOutput
+
 def postRollbackActions(Map config) {
     echo "📉 Scaling down current ${env.CURRENT_ENV} environment..."
 
@@ -493,20 +496,64 @@ def postRollbackActions(Map config) {
         """
         echo "✅ Current service (${env.CURRENT_ENV}) scaled down"
 
-        // Wait for service to stabilize
+        // Wait for current service to stabilize
         sh """
         aws ecs wait services-stable --cluster ${env.ECS_CLUSTER} --services ${env.CURRENT_SERVICE}
         """
-        echo "✅ All services are stable"
+        echo "✅ Current service is stable"
 
-        // --- NEW: Switch ALB listener to rolled-back environment BEFORE ECR cleanup ---
-        echo "🔄 Switching ALB listener to rolled-back environment (${env.ROLLBACK_ENV})..."
+        // --- Scale up rolled-back service ---
+        def rollbackServiceName = env.ROLLBACK_ENV.toLowerCase() + "-service"
+        echo "⬆️ Scaling up rolled-back service: ${rollbackServiceName}"
 
+        sh """
+        aws ecs update-service --cluster ${env.ECS_CLUSTER} --service ${rollbackServiceName} --desired-count 1
+        """
+        echo "✅ Rolled-back service scaling initiated"
+
+        // Wait for rolled-back service to stabilize
+        sh """
+        aws ecs wait services-stable --cluster ${env.ECS_CLUSTER} --services ${rollbackServiceName}
+        """
+        echo "✅ Rolled-back service is stable"
+
+        // --- Wait for all targets in rolled-back TG to be healthy ---
         def rollbackTgName = env.ROLLBACK_ENV.toLowerCase() + "-tg"
         def rollbackTgArn = sh(
             script: "aws elbv2 describe-target-groups --names ${rollbackTgName} --query 'TargetGroups[0].TargetGroupArn' --output text",
             returnStdout: true
         ).trim()
+
+        echo "⏳ Waiting for all targets in ${rollbackTgName} to become healthy..."
+        int maxAttempts = 30
+        int attempt = 0
+        int healthyCount = 0
+
+        while (attempt < maxAttempts) {
+            def healthJson = sh(
+                script: "aws elbv2 describe-target-health --target-group-arn ${rollbackTgArn} --query 'TargetHealthDescriptions[*].TargetHealth.State' --output json",
+                returnStdout: true
+            ).trim()
+
+            def states = new JsonSlurper().parseText(healthJson)
+            healthyCount = states.count { it == "healthy" }
+            echo "Healthy targets: ${healthyCount} / ${states.size()}"
+
+            if (states && healthyCount == states.size()) {
+                echo "✅ All targets in ${rollbackTgName} are healthy."
+                break
+            }
+
+            attempt++
+            sleep 10
+        }
+
+        if (healthyCount == 0) {
+            error "❌ No healthy targets in ${rollbackTgName} TG after waiting."
+        }
+
+        // --- Switch ALB listener to rolled-back environment BEFORE ECR cleanup ---
+        echo "🔄 Switching ALB listener to rolled-back environment (${env.ROLLBACK_ENV})..."
 
         def forwardAction = [
             [
@@ -519,7 +566,7 @@ def postRollbackActions(Map config) {
             ]
         ]
         def jsonFile = 'rollback-forward-config.json'
-        writeFile file: jsonFile, text: groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(forwardAction))
+        writeFile file: jsonFile, text: JsonOutput.prettyPrint(JsonOutput.toJson(forwardAction))
 
         sh """
         aws elbv2 modify-listener \
