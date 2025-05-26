@@ -121,7 +121,7 @@ def fetchResources(Map config) {
 
     try {
         result.ECS_CLUSTER = sh(
-            script: "terraform -chdir=${config.tfWorkingDir} output -raw ecs_cluster_id || aws ecs list-clusters --query 'clusterArns[0]' --output text",
+            script: "aws ecs list-clusters --query 'clusterArns[0]' --output text | awk -F'/' '{print \$2}'",
             returnStdout: true
         ).trim()
 
