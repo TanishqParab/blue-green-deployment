@@ -525,7 +525,7 @@ def postRollbackActions(Map config) {
         ).trim()
 
         echo "⏳ Waiting for all targets in ${rollbackTgName} to become healthy..."
-        int maxAttempts = 30
+        int maxAttempts = 10
         int attempt = 0
         int healthyCount = 0
 
@@ -545,7 +545,7 @@ def postRollbackActions(Map config) {
             }
 
             attempt++
-            sleep 10
+            sleep 02
         }
 
         if (healthyCount == 0) {
