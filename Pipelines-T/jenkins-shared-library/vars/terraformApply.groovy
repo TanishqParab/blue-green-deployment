@@ -51,7 +51,7 @@ def call(config) {
             sleep(60)
 
             def cluster = sh(
-                script: "terraform -chdir=${config.tfWorkingDir} output -raw ecs_cluster_id",
+                script: "aws ecs list-clusters --query 'clusterArns[0]' --output text | awk -F'/' '{print \$2}'",
                 returnStdout: true
             ).trim()
 
@@ -60,7 +60,7 @@ def call(config) {
             """
 
             def albDns = sh(
-                script: "terraform -chdir=${config.tfWorkingDir} output -raw alb_dns_name",
+                script: "aws elbv2 describe-load-balancers --names blue-green-alb --query 'LoadBalancers[0].DNSName' --output text",
                 returnStdout: true
             ).trim()
 
