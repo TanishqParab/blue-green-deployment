@@ -804,9 +804,3 @@ def scaleDownOldEnvironment(Map config) {
         throw e
     }
 }
-
-
-
-
-
-
