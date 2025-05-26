@@ -580,66 +580,11 @@ def testEnvironment(Map config) {
 import groovy.json.JsonOutput
 
 def switchTraffic(Map config) {
-    echo "🔄 Starting dynamic traffic switch..."
+    echo "🔄 Switching traffic to ${config.NEW_ENV}..."
 
-    // Fetch Blue and Green Target Group ARNs
-    def blueTgArn = sh(
-        script: "aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text",
-        returnStdout: true
-    ).trim()
-
-    def greenTgArn = sh(
-        script: "aws elbv2 describe-target-groups --names green-tg --query 'TargetGroups[0].TargetGroupArn' --output text",
-        returnStdout: true
-    ).trim()
-
-    // Fetch ALB ARN
-    def albArn = sh(
-        script: "aws elbv2 describe-load-balancers --names blue-green-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text",
-        returnStdout: true
-    ).trim()
-
-    // Fetch Listener ARN
-    def listenerArn = sh(
-        script: "aws elbv2 describe-listeners --load-balancer-arn ${albArn} --query 'Listeners[0].ListenerArn' --output text",
-        returnStdout: true
-    ).trim()
-
-    // Fetch current active Target Group ARN from Listener default action
-    def currentTgArn = sh(
-        script: """
-            aws elbv2 describe-listeners --listener-arns ${listenerArn} \
-            --query 'Listeners[0].DefaultActions[0].ForwardConfig.TargetGroups[0].TargetGroupArn || Listeners[0].DefaultActions[0].TargetGroupArn' \
-            --output text
-        """,
-        returnStdout: true
-    ).trim()
-
-    echo "🔹 Current active Target Group ARN: ${currentTgArn}"
-
-    // Determine live and idle target groups and environments
-    def liveEnv, idleEnv, liveTgArn, idleTgArn
-    if (currentTgArn == blueTgArn) {
-        liveEnv = "BLUE"
-        idleEnv = "GREEN"
-        liveTgArn = blueTgArn
-        idleTgArn = greenTgArn
-    } else if (currentTgArn == greenTgArn) {
-        liveEnv = "GREEN"
-        idleEnv = "BLUE"
-        liveTgArn = greenTgArn
-        idleTgArn = blueTgArn
-    } else {
-        error "Current active Target Group ARN does not match Blue or Green Target Groups."
-    }
-
-    echo "✅ Live Environment: ${liveEnv}"
-    echo "✅ Idle Environment: ${idleEnv}"
-
-    // Prepare forward action JSON to switch traffic 100% to idle TG
     def targetGroups = [
-        [TargetGroupArn: idleTgArn, Weight: 1],
-        [TargetGroupArn: liveTgArn, Weight: 0]
+        [TargetGroupArn: config.NEW_TG_ARN, Weight: 1],  // 100% traffic to new (idle) TG
+        [TargetGroupArn: config.OLD_TG_ARN, Weight: 0]   // 0% traffic to old (live) TG
     ]
 
     def forwardAction = [
@@ -654,16 +599,14 @@ def switchTraffic(Map config) {
     def jsonFile = 'forward-config.json'
     writeFile file: jsonFile, text: JsonOutput.prettyPrint(JsonOutput.toJson(forwardAction))
 
-    // Switch traffic by modifying ALB listener default action
     sh """
         aws elbv2 modify-listener \
-            --listener-arn ${listenerArn} \
+            --listener-arn ${config.LISTENER_ARN} \
             --default-actions file://${jsonFile}
     """
 
-    echo "✅ Traffic switched to ${idleEnv}"
+    echo "✅ Traffic successfully switched to ${config.NEW_ENV}"
 }
-
 
 import groovy.json.JsonSlurper
 
