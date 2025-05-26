@@ -188,52 +188,70 @@ def fetchResources(Map config) {
 import groovy.json.JsonOutput
 
 def ensureTargetGroupAssociation(Map config) {
-    echo "Ensuring target groups are associated with load balancer via weighted target groups..."
+    echo "Ensuring target group is associated with load balancer..."
 
-    if (!config.BLUE_TG_ARN || config.BLUE_TG_ARN.trim() == "") {
-        error "BLUE_TG_ARN is missing or empty"
+    if (!config.IDLE_TG_ARN || config.IDLE_TG_ARN.trim() == "") {
+        error "IDLE_TG_ARN is missing or empty"
     }
-    if (!config.GREEN_TG_ARN || config.GREEN_TG_ARN.trim() == "") {
-        error "GREEN_TG_ARN is missing or empty"
+    if (!config.ACTIVE_TG_ARN || config.ACTIVE_TG_ARN.trim() == "") {
+        error "ACTIVE_TG_ARN is missing or empty"
     }
     if (!config.LISTENER_ARN || config.LISTENER_ARN.trim() == "") {
         error "LISTENER_ARN is missing or empty"
     }
 
-    // Prepare weighted target groups with trimmed ARNs
-    def targetGroups = [
-        [TargetGroupArn: config.BLUE_TG_ARN.trim(), Weight: 50],
-        [TargetGroupArn: config.GREEN_TG_ARN.trim(), Weight: 50]
-    ]
+    def targetGroupInfo = sh(
+        script: """
+        aws elbv2 describe-target-groups --target-group-arns ${config.IDLE_TG_ARN} --query 'TargetGroups[0].LoadBalancerArns' --output json
+        """,
+        returnStdout: true
+    ).trim()
 
-    // Create the forward action configuration for ALB listener
-    def forwardAction = [
-        [
-            Type: "forward",
-            ForwardConfig: [
-                TargetGroups: targetGroups
+    // Use a @NonCPS helper for JSON parsing
+    def targetGroupJson = parseJson(targetGroupInfo)
+
+    if (targetGroupJson.size() == 0) {
+        echo "⚠️ Target group ${config.IDLE_ENV} is not associated with a load balancer. Applying weighted target group logic..."
+
+        // Prepare weighted target groups
+        def targetGroups = [
+            [TargetGroupArn: config.ACTIVE_TG_ARN.trim(), Weight: 50],
+            [TargetGroupArn: config.IDLE_TG_ARN.trim(), Weight: 50]
+        ]
+
+        // Create the forward action configuration
+        def forwardAction = [
+            [
+                Type: "forward",
+                ForwardConfig: [
+                    TargetGroups: targetGroups
+                ]
             ]
         ]
-    ]
 
-    // Convert the forward action to pretty JSON string
-    def jsonContent = JsonOutput.prettyPrint(JsonOutput.toJson(forwardAction))
-    echo "Listener default action JSON:\n${jsonContent}"
+        // Convert the forward action to JSON string
+        def jsonContent = JsonOutput.prettyPrint(JsonOutput.toJson(forwardAction))
+        echo "Listener default action JSON:\n${jsonContent}"
 
-    // Write JSON to file for AWS CLI consumption
-    def jsonFile = 'weighted-forward-config.json'
-    writeFile file: jsonFile, text: jsonContent
+        // Write JSON to file
+        def jsonFile = 'weighted-forward-config.json'
+        writeFile file: jsonFile, text: jsonContent
 
-    // Update the ALB listener default action using AWS CLI
-    try {
-        sh """
-            aws elbv2 modify-listener \
-                --listener-arn ${config.LISTENER_ARN.trim()} \
-                --default-actions file://${jsonFile}
-        """
-        echo "✅ Listener default action updated with weighted target groups."
-    } catch (Exception e) {
-        error "Failed to update listener default action: ${e.message}"
+        // Update listener with weighted target groups
+        try {
+            sh """
+                aws elbv2 modify-listener \
+                    --listener-arn ${config.LISTENER_ARN.trim()} \
+                    --default-actions file://${jsonFile}
+            """
+            echo "✅ Listener default action updated with weighted target groups."
+        } catch (Exception e) {
+            error "Failed to update listener default action: ${e.message}"
+        }
+
+        sleep(10)
+    } else {
+        echo "✅ Target group is already associated with load balancer"
     }
 }
 
@@ -241,9 +259,6 @@ def ensureTargetGroupAssociation(Map config) {
 def parseJson(String text) {
     new groovy.json.JsonSlurper().parseText(text)
 }
-
-
-
 
 
 import groovy.json.JsonSlurper
