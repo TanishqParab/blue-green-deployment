@@ -777,7 +777,7 @@ def scaleDownOldEnvironment(Map config) {
             break
         }
         attempt++
-        sleep 10
+        sleep 1
     }
     if (healthyCount == 0) {
         error "❌ No healthy targets in ${config.IDLE_ENV} TG after waiting."
