@@ -185,6 +185,7 @@ def fetchResources(Map config) {
     }
 }
 
+
 def ensureTargetGroupAssociation(Map config) {
     echo "Ensuring target group is associated with load balancer..."
 
@@ -250,7 +251,6 @@ def ensureTargetGroupAssociation(Map config) {
 def parseJson(String text) {
     new groovy.json.JsonSlurper().parseText(text)
 }
-
 
 
 import groovy.json.JsonSlurper
@@ -777,7 +777,7 @@ def scaleDownOldEnvironment(Map config) {
             break
         }
         attempt++
-        sleep 1
+        sleep 10
     }
     if (healthyCount == 0) {
         error "❌ No healthy targets in ${config.IDLE_ENV} TG after waiting."
