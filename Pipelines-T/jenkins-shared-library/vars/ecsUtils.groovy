@@ -571,79 +571,43 @@ def testEnvironment(Map config) {
 import groovy.json.JsonOutput
 
 def switchTraffic(Map config) {
-    echo "🔄 Dynamically fetching target groups and switching traffic..."
+    echo "🔄 Switching traffic from BLUE to GREEN..."
 
-    try {
-        def blueTgArn = sh(script: "aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text", returnStdout: true).trim()
-        def greenTgArn = sh(script: "aws elbv2 describe-target-groups --names green-tg --query 'TargetGroups[0].TargetGroupArn' --output text", returnStdout: true).trim()
+    def blueTgArn = sh(script: "aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text", returnStdout: true).trim()
+    def greenTgArn = sh(script: "aws elbv2 describe-target-groups --names green-tg --query 'TargetGroups[0].TargetGroupArn' --output text", returnStdout: true).trim()
 
-        if (!blueTgArn || blueTgArn == 'None') error "Blue target group ARN not found"
-        if (!greenTgArn || greenTgArn == 'None') error "Green target group ARN not found"
+    if (!blueTgArn || blueTgArn == 'None') error "Blue target group ARN not found"
+    if (!greenTgArn || greenTgArn == 'None') error "Green target group ARN not found"
 
-        def listenerArn = config.LISTENER_ARN
-        if (!listenerArn) error "Listener ARN must be provided"
+    def listenerArn = config.LISTENER_ARN
+    if (!listenerArn) error "Listener ARN must be provided"
 
-        def currentTgArn = sh(script: """
-            aws elbv2 describe-listeners --listener-arns ${listenerArn} \
-            --query 'Listeners[0].DefaultActions[0].ForwardConfig.TargetGroups[0].TargetGroupArn || Listeners[0].DefaultActions[0].TargetGroupArn' \
-            --output text
-        """, returnStdout: true).trim()
+    // Always switch TO green (the just-updated environment)
+    def targetGroups = [
+        [TargetGroupArn: greenTgArn, Weight: 1], // new version
+        [TargetGroupArn: blueTgArn, Weight: 0]   // old version
+    ]
 
-        def activeTgArn, idleTgArn, activeEnv, idleEnv
-        if (currentTgArn == blueTgArn) {
-            activeTgArn = blueTgArn
-            idleTgArn = greenTgArn
-            activeEnv = "BLUE"
-            idleEnv = "GREEN"
-        } else if (currentTgArn == greenTgArn) {
-            activeTgArn = greenTgArn
-            idleTgArn = blueTgArn
-            activeEnv = "GREEN"
-            idleEnv = "BLUE"
-        } else {
-            error "Current active TG ARN does not match blue or green target groups"
-        }
-
-        echo "Switching traffic from ${activeEnv} to ${idleEnv}"
-
-        def targetGroups = [
-            [TargetGroupArn: idleTgArn, Weight: 1],
-            [TargetGroupArn: activeTgArn, Weight: 0]
-        ]
-
-        def forwardAction = [
-            [
-                Type: "forward",
-                ForwardConfig: [
-                    TargetGroups: targetGroups
-                ]
+    def forwardAction = [
+        [
+            Type: "forward",
+            ForwardConfig: [
+                TargetGroups: targetGroups
             ]
         ]
+    ]
 
-        def jsonFile = 'forward-config.json'
-        writeFile file: jsonFile, text: JsonOutput.prettyPrint(JsonOutput.toJson(forwardAction))
+    def jsonFile = 'forward-config.json'
+    writeFile file: jsonFile, text: JsonOutput.prettyPrint(JsonOutput.toJson(forwardAction))
 
-        sh """
-        aws elbv2 modify-listener \
-          --listener-arn ${listenerArn} \
-          --default-actions file://${jsonFile}
-        """
+    sh """
+    aws elbv2 modify-listener \
+      --listener-arn ${listenerArn} \
+      --default-actions file://${jsonFile}
+    """
 
-        echo "✅ Traffic switched to ${idleEnv}"
-
-        return [
-            ACTIVE_TG_ARN: activeTgArn,
-            IDLE_TG_ARN: idleTgArn,
-            ACTIVE_ENV: activeEnv,
-            IDLE_ENV: idleEnv
-        ]
-
-    } catch (Exception e) {
-        echo "❌ Error during dynamic traffic switch: ${e.message}"
-        throw e
-    }
+    echo "✅ Traffic switched to GREEN"
 }
-
 
 import groovy.json.JsonSlurper
 
