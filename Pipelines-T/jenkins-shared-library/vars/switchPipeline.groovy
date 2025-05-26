@@ -226,32 +226,70 @@ def call(Map config) {
                 }
                 steps {
                     script {
-                        // Fetch ARNs dynamically
-                        def blueTgArn = sh(script: "aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text", returnStdout: true).trim()
-                        def greenTgArn = sh(script: "aws elbv2 describe-target-groups --names green-tg --query 'TargetGroups[0].TargetGroupArn' --output text", returnStdout: true).trim()
-                        def albArn = sh(script: "aws elbv2 describe-load-balancers --names ${env.ALB_NAME} --query 'LoadBalancers[0].LoadBalancerArn' --output text", returnStdout: true).trim()
-                        def listenerArn = sh(script: "aws elbv2 describe-listeners --load-balancer-arn ${albArn} --query 'Listeners[0].ListenerArn' --output text", returnStdout: true).trim()
-
-                        // Decide which environment to switch to
-                        def targetEnv = env.DEPLOY_TARGET_ENV ?: "GREEN" // Default to GREEN
-                        def newTgArn = (targetEnv == "GREEN") ? greenTgArn : blueTgArn
-                        def oldTgArn = (targetEnv == "GREEN") ? blueTgArn : greenTgArn
-
-                        echo "🔄 Switching traffic to ${targetEnv}..."
-                        echo "🔹 LISTENER_ARN: ${listenerArn}"
-                        echo "🔹 NEW_TG_ARN : ${newTgArn}"
-                        echo "🔹 OLD_TG_ARN : ${oldTgArn}"
-
-                        switchTraffic([
-                            LISTENER_ARN: listenerArn,
-                            NEW_TG_ARN: newTgArn,
-                            OLD_TG_ARN: oldTgArn,
-                            NEW_ENV: targetEnv
-                        ])
+                        if (config.implementation == 'ec2') {
+                            // For EC2, just call switchTraffic with config as is
+                            ec2Utils.switchTraffic(config)
+                        } else if (config.implementation == 'ecs') {
+                            // Dynamically fetch all necessary resources
+                            def blueTgArn = sh(
+                                script: "aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text",
+                                returnStdout: true
+                            ).trim()
+            
+                            def greenTgArn = sh(
+                                script: "aws elbv2 describe-target-groups --names green-tg --query 'TargetGroups[0].TargetGroupArn' --output text",
+                                returnStdout: true
+                            ).trim()
+            
+                            def albArn = sh(
+                                script: "aws elbv2 describe-load-balancers --names blue-green-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text",
+                                returnStdout: true
+                            ).trim()
+            
+                            def listenerArn = sh(
+                                script: "aws elbv2 describe-listeners --load-balancer-arn ${albArn} --query 'Listeners[0].ListenerArn' --output text",
+                                returnStdout: true
+                            ).trim()
+            
+                            def currentTgArn = sh(
+                                script: """
+                                    aws elbv2 describe-listeners --listener-arns ${listenerArn} \
+                                    --query 'Listeners[0].DefaultActions[0].ForwardConfig.TargetGroups[0].TargetGroupArn || Listeners[0].DefaultActions[0].TargetGroupArn' \
+                                    --output text
+                                """,
+                                returnStdout: true
+                            ).trim()
+            
+                            def liveEnv, idleEnv, liveTgArn, idleTgArn
+                            if (currentTgArn == blueTgArn) {
+                                liveEnv = "BLUE"
+                                idleEnv = "GREEN"
+                                liveTgArn = blueTgArn
+                                idleTgArn = greenTgArn
+                            } else if (currentTgArn == greenTgArn) {
+                                liveEnv = "GREEN"
+                                idleEnv = "BLUE"
+                                liveTgArn = greenTgArn
+                                idleTgArn = blueTgArn
+                            } else {
+                                error "Current active Target Group ARN does not match Blue or Green Target Groups."
+                            }
+            
+                            echo "🔄 Switching traffic to ${idleEnv} with:"
+                            echo "🔹 LISTENER_ARN: ${listenerArn}"
+                            echo "🔹 IDLE_TG_ARN : ${idleTgArn}"
+            
+                            ecsUtils.switchTraffic([
+                                LISTENER_ARN: listenerArn,
+                                NEW_TG_ARN: idleTgArn,
+                                OLD_TG_ARN: liveTgArn,
+                                NEW_ENV: idleEnv
+                            ])
+                        }
                     }
                 }
             }
-
+            
             stage('Post-Switch Actions') {
                 when {
                     expression {
