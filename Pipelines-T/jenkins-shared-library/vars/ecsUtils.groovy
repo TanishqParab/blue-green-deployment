@@ -115,7 +115,7 @@ def detectChanges(Map config) {
 
 
 import groovy.json.JsonSlurper
-import org.jenkinsci.plugins.workflow.cps.NonCPS
+
 
 def fetchResources(Map config) {
     echo "🔄 Fetching ECS and ALB resources..."
@@ -215,7 +215,7 @@ def fetchResources(Map config) {
 
 @NonCPS
 def parseJson(String json) {
-    def jsonSlurper = new JsonSlurper()
+    def jsonSlurper = new groovy.json.JsonSlurper()
     return jsonSlurper.parseText(json)
 }
 
