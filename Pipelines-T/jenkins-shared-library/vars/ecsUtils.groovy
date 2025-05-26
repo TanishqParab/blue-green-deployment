@@ -116,7 +116,6 @@ def detectChanges(Map config) {
 
 import groovy.json.JsonSlurper
 
-
 def fetchResources(Map config) {
     echo "🔄 Fetching ECS and ALB resources..."
 
@@ -162,19 +161,21 @@ def fetchResources(Map config) {
             returnStdout: true
         ).trim()
 
-        def targetGroups = parseJson(targetGroupsJson)
+        def targetGroups = parseJsonString(targetGroupsJson)
 
         // Find which target group has weight > 0 (live)
         def liveTgArn = null
 
-        targetGroups.each { tg ->
-            if (tg.Weight > 0) {
-                liveTgArn = tg.TargetGroupArn
+        if (targetGroups) {
+            targetGroups.each { tg ->
+                if (tg.Weight > 0) {
+                    liveTgArn = tg.TargetGroupArn
+                }
             }
         }
 
         // Defensive: if no TG with weight > 0 found, fallback to first TG
-        if (liveTgArn == null && targetGroups.size() > 0) {
+        if (liveTgArn == null && targetGroups?.size() > 0) {
             liveTgArn = targetGroups[0].TargetGroupArn
         }
 
@@ -214,10 +215,12 @@ def fetchResources(Map config) {
 }
 
 @NonCPS
-def parseJson(String json) {
-    def jsonSlurper = new groovy.json.JsonSlurper()
+def parseJsonString(String json) {
+    def jsonSlurper = new JsonSlurper()
     return jsonSlurper.parseText(json)
 }
+
+
 
 def ensureTargetGroupAssociation(Map config) {
     echo "Ensuring target group is associated with load balancer..."
