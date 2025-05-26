@@ -149,25 +149,42 @@ def fetchResources(Map config) {
             returnStdout: true
         ).trim()
 
-        // Fetch current active Target Group ARN from Listener's default action
-        def currentTargetGroup = sh(
+        // Fetch all target groups and their weights from the listener's default action
+        def targetGroupsJson = sh(
             script: """
             aws elbv2 describe-listeners --listener-arns ${result.LISTENER_ARN} \
-            --query 'Listeners[0].DefaultActions[0].ForwardConfig.TargetGroups[0].TargetGroupArn || Listeners[0].DefaultActions[0].TargetGroupArn' \
-            --output text
+            --query 'Listeners[0].DefaultActions[0].ForwardConfig.TargetGroups' \
+            --output json
             """,
             returnStdout: true
         ).trim()
 
-        // Determine live and idle environment based on currentTargetGroup
-        if (currentTargetGroup == result.BLUE_TG_ARN) {
+        def targetGroups = new groovy.json.JsonSlurperClassic().parseText(targetGroupsJson)
+
+        // Find which target group has weight > 0 (live)
+        def liveTgArn = null
+        def idleTgArn = null
+
+        targetGroups.each { tg ->
+            if (tg.Weight > 0) {
+                liveTgArn = tg.TargetGroupArn
+            }
+        }
+
+        // Defensive: if no TG with weight > 0 found, fallback to first TG
+        if (liveTgArn == null && targetGroups.size() > 0) {
+            liveTgArn = targetGroups[0].TargetGroupArn
+        }
+
+        // Determine live and idle environment based on liveTgArn
+        if (liveTgArn == result.BLUE_TG_ARN) {
             result.LIVE_ENV = "BLUE"
             result.IDLE_ENV = "GREEN"
             result.LIVE_TG_ARN = result.BLUE_TG_ARN
             result.IDLE_TG_ARN = result.GREEN_TG_ARN
             result.LIVE_SERVICE = "blue-service"
             result.IDLE_SERVICE = "green-service"
-        } else if (currentTargetGroup == result.GREEN_TG_ARN) {
+        } else if (liveTgArn == result.GREEN_TG_ARN) {
             result.LIVE_ENV = "GREEN"
             result.IDLE_ENV = "BLUE"
             result.LIVE_TG_ARN = result.GREEN_TG_ARN
@@ -175,7 +192,7 @@ def fetchResources(Map config) {
             result.LIVE_SERVICE = "green-service"
             result.IDLE_SERVICE = "blue-service"
         } else {
-            error "❌ Current active Target Group ARN (${currentTargetGroup}) does not match Blue or Green Target Groups."
+            error "❌ Live Target Group ARN (${liveTgArn}) does not match Blue or Green Target Groups."
         }
 
         // Log all fetched details
