@@ -114,6 +114,9 @@ def detectChanges(Map config) {
 }
 
 
+import groovy.json.JsonSlurper
+import org.jenkinsci.plugins.workflow.cps.NonCPS
+
 def fetchResources(Map config) {
     echo "🔄 Fetching ECS and ALB resources..."
 
@@ -159,11 +162,10 @@ def fetchResources(Map config) {
             returnStdout: true
         ).trim()
 
-        def targetGroups = new groovy.json.JsonSlurperClassic().parseText(targetGroupsJson)
+        def targetGroups = parseJson(targetGroupsJson)
 
         // Find which target group has weight > 0 (live)
         def liveTgArn = null
-        def idleTgArn = null
 
         targetGroups.each { tg ->
             if (tg.Weight > 0) {
@@ -211,6 +213,11 @@ def fetchResources(Map config) {
     }
 }
 
+@NonCPS
+def parseJson(String json) {
+    def jsonSlurper = new JsonSlurper()
+    return jsonSlurper.parseText(json)
+}
 
 def ensureTargetGroupAssociation(Map config) {
     echo "Ensuring target group is associated with load balancer..."
