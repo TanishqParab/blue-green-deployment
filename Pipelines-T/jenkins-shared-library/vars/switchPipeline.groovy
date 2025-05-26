@@ -231,13 +231,12 @@ def call(Map config) {
                         if (config.implementation == 'ec2') {
                             ec2Utils.switchTraffic(config)
                         } else if (config.implementation == 'ecs') {
-                            // Always switch to the environment you just deployed to
                             ecsUtils.switchTrafficToTargetEnv(env.TARGET_ENV)
                         }
                     }
                 }
             }
-            
+                        
             stage('Post-Switch Actions') {
                 when {
                     expression {
