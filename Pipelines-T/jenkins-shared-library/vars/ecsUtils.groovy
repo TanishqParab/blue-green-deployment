@@ -120,11 +120,13 @@ def fetchResources(Map config) {
     def result = [:]
 
     try {
+        // Fetch ECS cluster name (extracting cluster name from ARN)
         result.ECS_CLUSTER = sh(
             script: "aws ecs list-clusters --query 'clusterArns[0]' --output text | awk -F'/' '{print \$2}'",
             returnStdout: true
         ).trim()
 
+        // Fetch Blue and Green Target Group ARNs
         result.BLUE_TG_ARN = sh(
             script: "aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text",
             returnStdout: true
@@ -135,16 +137,19 @@ def fetchResources(Map config) {
             returnStdout: true
         ).trim()
 
+        // Fetch ALB ARN
         result.ALB_ARN = sh(
             script: "aws elbv2 describe-load-balancers --names blue-green-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text",
             returnStdout: true
         ).trim()
 
+        // Fetch Listener ARN
         result.LISTENER_ARN = sh(
             script: "aws elbv2 describe-listeners --load-balancer-arn ${result.ALB_ARN} --query 'Listeners[0].ListenerArn' --output text",
             returnStdout: true
         ).trim()
 
+        // Fetch current active Target Group ARN from Listener's default action
         def currentTargetGroup = sh(
             script: """
             aws elbv2 describe-listeners --listener-arns ${result.LISTENER_ARN} \
@@ -154,6 +159,7 @@ def fetchResources(Map config) {
             returnStdout: true
         ).trim()
 
+        // Determine live and idle environment based on currentTargetGroup
         if (currentTargetGroup == result.BLUE_TG_ARN) {
             result.LIVE_ENV = "BLUE"
             result.IDLE_ENV = "GREEN"
@@ -161,18 +167,21 @@ def fetchResources(Map config) {
             result.IDLE_TG_ARN = result.GREEN_TG_ARN
             result.LIVE_SERVICE = "blue-service"
             result.IDLE_SERVICE = "green-service"
-        } else {
+        } else if (currentTargetGroup == result.GREEN_TG_ARN) {
             result.LIVE_ENV = "GREEN"
             result.IDLE_ENV = "BLUE"
             result.LIVE_TG_ARN = result.GREEN_TG_ARN
             result.IDLE_TG_ARN = result.BLUE_TG_ARN
             result.LIVE_SERVICE = "green-service"
             result.IDLE_SERVICE = "blue-service"
+        } else {
+            error "❌ Current active Target Group ARN (${currentTargetGroup}) does not match Blue or Green Target Groups."
         }
 
+        // Log all fetched details
         echo "✅ ECS Cluster: ${result.ECS_CLUSTER}"
-        echo "✅ Blue TG: ${result.BLUE_TG_ARN}"
-        echo "✅ Green TG: ${result.GREEN_TG_ARN}"
+        echo "✅ Blue Target Group ARN: ${result.BLUE_TG_ARN}"
+        echo "✅ Green Target Group ARN: ${result.GREEN_TG_ARN}"
         echo "✅ ALB ARN: ${result.ALB_ARN}"
         echo "✅ Listener ARN: ${result.LISTENER_ARN}"
         echo "✅ LIVE ENV: ${result.LIVE_ENV}"
