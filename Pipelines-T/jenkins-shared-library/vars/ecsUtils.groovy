@@ -185,16 +185,11 @@ def fetchResources(Map config) {
     }
 }
 
-import groovy.json.JsonOutput
-
 def ensureTargetGroupAssociation(Map config) {
     echo "Ensuring target group is associated with load balancer..."
 
     if (!config.IDLE_TG_ARN || config.IDLE_TG_ARN.trim() == "") {
         error "IDLE_TG_ARN is missing or empty"
-    }
-    if (!config.ACTIVE_TG_ARN || config.ACTIVE_TG_ARN.trim() == "") {
-        error "ACTIVE_TG_ARN is missing or empty"
     }
     if (!config.LISTENER_ARN || config.LISTENER_ARN.trim() == "") {
         error "LISTENER_ARN is missing or empty"
@@ -211,45 +206,41 @@ def ensureTargetGroupAssociation(Map config) {
     def targetGroupJson = parseJson(targetGroupInfo)
 
     if (targetGroupJson.size() == 0) {
-        echo "⚠️ Target group ${config.IDLE_ENV} is not associated with a load balancer. Applying weighted target group logic..."
+        echo "⚠️ Target group ${config.IDLE_ENV} is not associated with a load balancer. Creating a path-based rule..."
 
-        // Prepare weighted target groups
-        def targetGroups = [
-            [TargetGroupArn: config.ACTIVE_TG_ARN.trim(), Weight: 50],
-            [TargetGroupArn: config.IDLE_TG_ARN.trim(), Weight: 50]
-        ]
+        def rulesJson = sh(
+            script: """
+            aws elbv2 describe-rules --listener-arn ${config.LISTENER_ARN} --query 'Rules[*].Priority' --output json
+            """,
+            returnStdout: true
+        ).trim()
 
-        // Create the forward action configuration
-        def forwardAction = [
-            [
-                Type: "forward",
-                ForwardConfig: [
-                    TargetGroups: targetGroups
-                ]
-            ]
-        ]
+        def priorities = parseJson(rulesJson)
+            .findAll { it != 'default' }
+            .collect { it as int }
+            .sort()
 
-        // Convert the forward action to JSON string
-        def jsonContent = JsonOutput.prettyPrint(JsonOutput.toJson(forwardAction))
-        echo "Listener default action JSON:\n${jsonContent}"
-
-        // Write JSON to file
-        def jsonFile = 'weighted-forward-config.json'
-        writeFile file: jsonFile, text: jsonContent
-
-        // Update listener with weighted target groups
-        try {
-            sh """
-                aws elbv2 modify-listener \
-                    --listener-arn ${config.LISTENER_ARN.trim()} \
-                    --default-actions file://${jsonFile}
-            """
-            echo "✅ Listener default action updated with weighted target groups."
-        } catch (Exception e) {
-            error "Failed to update listener default action: ${e.message}"
+        int startPriority = 100
+        int nextPriority = startPriority
+        for (p in priorities) {
+            if (p == nextPriority) {
+                nextPriority++
+            } else if (p > nextPriority) {
+                break
+            }
         }
+        echo "Using rule priority: ${nextPriority}"
+
+        sh """
+        aws elbv2 create-rule \
+            --listener-arn ${config.LISTENER_ARN} \
+            --priority ${nextPriority} \
+            --conditions '[{"Field":"path-pattern","Values":["/associate-tg*"]}]' \
+            --actions '[{"Type":"forward","TargetGroupArn":"${config.IDLE_TG_ARN}"}]'
+        """
 
         sleep(10)
+        echo "✅ Target group associated with load balancer via path rule (priority ${nextPriority})"
     } else {
         echo "✅ Target group is already associated with load balancer"
     }
@@ -259,6 +250,7 @@ def ensureTargetGroupAssociation(Map config) {
 def parseJson(String text) {
     new groovy.json.JsonSlurper().parseText(text)
 }
+
 
 
 import groovy.json.JsonSlurper
