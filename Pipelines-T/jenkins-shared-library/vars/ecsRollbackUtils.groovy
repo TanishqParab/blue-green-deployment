@@ -517,41 +517,6 @@ def postRollbackActions(Map config) {
         """
         echo "✅ Rolled-back service is stable"
 
-        // --- Wait for all targets in rolled-back TG to be healthy ---
-        def rollbackTgName = env.ROLLBACK_ENV.toLowerCase() + "-tg"
-        def rollbackTgArn = sh(
-            script: "aws elbv2 describe-target-groups --names ${rollbackTgName} --query 'TargetGroups[0].TargetGroupArn' --output text",
-            returnStdout: true
-        ).trim()
-
-        echo "⏳ Waiting for all targets in ${rollbackTgName} to become healthy..."
-        int maxAttempts = 30
-        int attempt = 0
-        int healthyCount = 0
-
-        while (attempt < maxAttempts) {
-            def healthJson = sh(
-                script: "aws elbv2 describe-target-health --target-group-arn ${rollbackTgArn} --query 'TargetHealthDescriptions[*].TargetHealth.State' --output json",
-                returnStdout: true
-            ).trim()
-
-            def states = new JsonSlurper().parseText(healthJson)
-            healthyCount = states.count { it == "healthy" }
-            echo "Healthy targets: ${healthyCount} / ${states.size()}"
-
-            if (states && healthyCount == states.size()) {
-                echo "✅ All targets in ${rollbackTgName} are healthy."
-                break
-            }
-
-            attempt++
-            sleep 10
-        }
-
-        if (healthyCount == 0) {
-            error "❌ No healthy targets in ${rollbackTgName} TG after waiting."
-        }
-
         // --- Switch ALB listener to rolled-back environment BEFORE ECR cleanup ---
         echo "🔄 Switching ALB listener to rolled-back environment (${env.ROLLBACK_ENV})..."
 
