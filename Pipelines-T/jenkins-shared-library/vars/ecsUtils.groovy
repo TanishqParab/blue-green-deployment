@@ -568,24 +568,12 @@ def testEnvironment(Map config) {
     }
 }
 
-import groovy.json.JsonOutput
-
 def switchTraffic(Map config) {
-    echo "🔄 Switching traffic from BLUE to GREEN..."
+    echo "🔄 Switching traffic to ${config.NEW_ENV}..."
 
-    def blueTgArn = sh(script: "aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text", returnStdout: true).trim()
-    def greenTgArn = sh(script: "aws elbv2 describe-target-groups --names green-tg --query 'TargetGroups[0].TargetGroupArn' --output text", returnStdout: true).trim()
-
-    if (!blueTgArn || blueTgArn == 'None') error "Blue target group ARN not found"
-    if (!greenTgArn || greenTgArn == 'None') error "Green target group ARN not found"
-
-    def listenerArn = config.LISTENER_ARN
-    if (!listenerArn) error "Listener ARN must be provided"
-
-    // Always switch TO green (the just-updated environment)
     def targetGroups = [
-        [TargetGroupArn: greenTgArn, Weight: 1], // new version
-        [TargetGroupArn: blueTgArn, Weight: 0]   // old version
+        [TargetGroupArn: config.NEW_TG_ARN, Weight: 1], // 100% to new
+        [TargetGroupArn: config.OLD_TG_ARN, Weight: 0]  // 0% to old
     ]
 
     def forwardAction = [
@@ -598,16 +586,17 @@ def switchTraffic(Map config) {
     ]
 
     def jsonFile = 'forward-config.json'
-    writeFile file: jsonFile, text: JsonOutput.prettyPrint(JsonOutput.toJson(forwardAction))
+    writeFile file: jsonFile, text: groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(forwardAction))
 
     sh """
-    aws elbv2 modify-listener \
-      --listener-arn ${listenerArn} \
-      --default-actions file://${jsonFile}
+        aws elbv2 modify-listener \
+            --listener-arn ${config.LISTENER_ARN} \
+            --default-actions file://${jsonFile}
     """
 
-    echo "✅ Traffic switched to GREEN"
+    echo "✅ Traffic switched to ${config.NEW_ENV}"
 }
+
 
 import groovy.json.JsonSlurper
 
