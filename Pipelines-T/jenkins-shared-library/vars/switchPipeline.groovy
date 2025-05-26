@@ -226,25 +226,28 @@ def call(Map config) {
                 }
                 steps {
                     script {
-                        if (config.implementation == 'ec2') {
-                            // For EC2, just call switchTraffic with config as is
-                            ec2Utils.switchTraffic(config)
-                        } else if (config.implementation == 'ecs') {
-                            // For ECS, fetch resources first
-                            def resourceInfo = ecsUtils.fetchResources([
-                                tfWorkingDir: env.TF_WORKING_DIR
-                            ])
-            
-                            echo "🔄 Switching to ${resourceInfo.IDLE_ENV} with:"
-                            echo "🔹 LISTENER_ARN: ${resourceInfo.LISTENER_ARN}"
-                            echo "🔹 IDLE_TG_ARN : ${resourceInfo.IDLE_TG_ARN}"
-            
-                            ecsUtils.switchTraffic([
-                                LISTENER_ARN: resourceInfo.LISTENER_ARN,
-                                IDLE_TG_ARN : resourceInfo.IDLE_TG_ARN,
-                                IDLE_ENV    : resourceInfo.IDLE_ENV
-                            ])
-                        }
+                        // Fetch ARNs dynamically
+                        def blueTgArn = sh(script: "aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text", returnStdout: true).trim()
+                        def greenTgArn = sh(script: "aws elbv2 describe-target-groups --names green-tg --query 'TargetGroups[0].TargetGroupArn' --output text", returnStdout: true).trim()
+                        def albArn = sh(script: "aws elbv2 describe-load-balancers --names ${env.ALB_NAME} --query 'LoadBalancers[0].LoadBalancerArn' --output text", returnStdout: true).trim()
+                        def listenerArn = sh(script: "aws elbv2 describe-listeners --load-balancer-arn ${albArn} --query 'Listeners[0].ListenerArn' --output text", returnStdout: true).trim()
+
+                        // Decide which environment to switch to
+                        def targetEnv = env.DEPLOY_TARGET_ENV ?: "GREEN" // Default to GREEN
+                        def newTgArn = (targetEnv == "GREEN") ? greenTgArn : blueTgArn
+                        def oldTgArn = (targetEnv == "GREEN") ? blueTgArn : greenTgArn
+
+                        echo "🔄 Switching traffic to ${targetEnv}..."
+                        echo "🔹 LISTENER_ARN: ${listenerArn}"
+                        echo "🔹 NEW_TG_ARN : ${newTgArn}"
+                        echo "🔹 OLD_TG_ARN : ${oldTgArn}"
+
+                        switchTraffic([
+                            LISTENER_ARN: listenerArn,
+                            NEW_TG_ARN: newTgArn,
+                            OLD_TG_ARN: oldTgArn,
+                            NEW_ENV: targetEnv
+                        ])
                     }
                 }
             }
