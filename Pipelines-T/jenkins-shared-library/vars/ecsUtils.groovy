@@ -652,7 +652,7 @@ def scaleDownOldEnvironment(Map config) {
     if (!config.ECS_CLUSTER) {
         echo "⚙️ ECS_CLUSTER not set, fetching dynamically from Terraform output..."
         def ecsClusterId = sh(
-            script: "terraform -chdir=/var/lib/jenkins/workspace/blue-green-deployment-job-ecs-switch-test/blue-green-deployment output -raw ecs_cluster_id",
+            script: "aws ecs list-clusters --query 'clusterArns[0]' --output text | awk -F'/' '{print \$2}'",
             returnStdout: true
         ).trim()
         if (!ecsClusterId) {
