@@ -191,23 +191,24 @@ import groovy.json.JsonOutput
 def ensureTargetGroupAssociation(Map config) {
     echo "Ensuring target groups are associated with load balancer via weighted target groups..."
 
-    if (!config.BLUE_TG_ARN || config.BLUE_TG_ARN.trim() == "") {
+    // Validate required parameters with safe trimming
+    if (!config.BLUE_TG_ARN?.trim()) {
         error "BLUE_TG_ARN is missing or empty"
     }
-    if (!config.GREEN_TG_ARN || config.GREEN_TG_ARN.trim() == "") {
+    if (!config.GREEN_TG_ARN?.trim()) {
         error "GREEN_TG_ARN is missing or empty"
     }
-    if (!config.LISTENER_ARN || config.LISTENER_ARN.trim() == "") {
+    if (!config.LISTENER_ARN?.trim()) {
         error "LISTENER_ARN is missing or empty"
     }
 
-    // Define the weighted target groups
+    // Prepare weighted target groups with trimmed ARNs
     def targetGroups = [
-        [TargetGroupArn: config.BLUE_TG_ARN, Weight: 50],
-        [TargetGroupArn: config.GREEN_TG_ARN, Weight: 50]
+        [TargetGroupArn: config.BLUE_TG_ARN.trim(), Weight: 50],
+        [TargetGroupArn: config.GREEN_TG_ARN.trim(), Weight: 50]
     ]
 
-    // Create the forward action configuration
+    // Create the forward action configuration for ALB listener
     def forwardAction = [
         [
             Type: "forward",
@@ -217,19 +218,27 @@ def ensureTargetGroupAssociation(Map config) {
         ]
     ]
 
-    // Convert the configuration to JSON format
+    // Convert the forward action to pretty JSON string
+    def jsonContent = JsonOutput.prettyPrint(JsonOutput.toJson(forwardAction))
+    echo "Listener default action JSON:\n${jsonContent}"
+
+    // Write JSON to file for AWS CLI consumption
     def jsonFile = 'weighted-forward-config.json'
-    writeFile file: jsonFile, text: JsonOutput.prettyPrint(JsonOutput.toJson(forwardAction))
+    writeFile file: jsonFile, text: jsonContent
 
-    // Modify the listener to set the default action
-    sh """
-        aws elbv2 modify-listener \
-            --listener-arn ${config.LISTENER_ARN} \
-            --default-actions file://${jsonFile}
-    """
-
-    echo "✅ Listener default action updated with weighted target groups."
+    // Update the ALB listener default action using AWS CLI
+    try {
+        sh """
+            aws elbv2 modify-listener \
+                --listener-arn ${config.LISTENER_ARN.trim()} \
+                --default-actions file://${jsonFile}
+        """
+        echo "✅ Listener default action updated with weighted target groups."
+    } catch (Exception e) {
+        error "Failed to update listener default action: ${e.message}"
+    }
 }
+
 
 
 
