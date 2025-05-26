@@ -120,11 +120,13 @@ def fetchResources(Map config) {
     def result = [:]
 
     try {
+        // Fetch ECS cluster name (extract cluster name from ARN)
         result.ECS_CLUSTER = sh(
             script: "aws ecs list-clusters --query 'clusterArns[0]' --output text | awk -F'/' '{print \$2}'",
             returnStdout: true
         ).trim()
 
+        // Fetch Blue and Green target group ARNs
         result.BLUE_TG_ARN = sh(
             script: "aws elbv2 describe-target-groups --names blue-tg --query 'TargetGroups[0].TargetGroupArn' --output text",
             returnStdout: true
@@ -135,25 +137,29 @@ def fetchResources(Map config) {
             returnStdout: true
         ).trim()
 
+        // Fetch ALB ARN
         result.ALB_ARN = sh(
             script: "aws elbv2 describe-load-balancers --names blue-green-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text",
             returnStdout: true
         ).trim()
 
+        // Fetch Listener ARN for the ALB
         result.LISTENER_ARN = sh(
             script: "aws elbv2 describe-listeners --load-balancer-arn ${result.ALB_ARN} --query 'Listeners[0].ListenerArn' --output text",
             returnStdout: true
         ).trim()
 
+        // Determine current active target group from listener default action
         def currentTargetGroup = sh(
             script: """
-            aws elbv2 describe-listeners --listener-arns ${result.LISTENER_ARN} \
-            --query 'Listeners[0].DefaultActions[0].ForwardConfig.TargetGroups[0].TargetGroupArn || Listeners[0].DefaultActions[0].TargetGroupArn' \
-            --output text
+                aws elbv2 describe-listeners --listener-arns ${result.LISTENER_ARN} \\
+                --query 'Listeners[0].DefaultActions[0].ForwardConfig.TargetGroups[0].TargetGroupArn || Listeners[0].DefaultActions[0].TargetGroupArn' \\
+                --output text
             """,
             returnStdout: true
         ).trim()
 
+        // Set live and idle environments and services based on active target group
         if (currentTargetGroup == result.BLUE_TG_ARN) {
             result.LIVE_ENV = "BLUE"
             result.IDLE_ENV = "GREEN"
@@ -161,22 +167,38 @@ def fetchResources(Map config) {
             result.IDLE_TG_ARN = result.GREEN_TG_ARN
             result.LIVE_SERVICE = "blue-service"
             result.IDLE_SERVICE = "green-service"
-        } else {
+        } else if (currentTargetGroup == result.GREEN_TG_ARN) {
             result.LIVE_ENV = "GREEN"
             result.IDLE_ENV = "BLUE"
             result.LIVE_TG_ARN = result.GREEN_TG_ARN
             result.IDLE_TG_ARN = result.BLUE_TG_ARN
             result.LIVE_SERVICE = "green-service"
             result.IDLE_SERVICE = "blue-service"
+        } else {
+            error "Current active target group ARN does not match blue or green target groups"
         }
 
-        echo "✅ ECS Cluster: ${result.ECS_CLUSTER}"
-        echo "✅ Blue TG: ${result.BLUE_TG_ARN}"
-        echo "✅ Green TG: ${result.GREEN_TG_ARN}"
-        echo "✅ ALB ARN: ${result.ALB_ARN}"
-        echo "✅ Listener ARN: ${result.LISTENER_ARN}"
-        echo "✅ LIVE ENV: ${result.LIVE_ENV}"
-        echo "✅ IDLE ENV: ${result.IDLE_ENV}"
+        // Export values to environment variables for use in other stages
+        env.ECS_CLUSTER = result.ECS_CLUSTER
+        env.BLUE_TG_ARN = result.BLUE_TG_ARN
+        env.GREEN_TG_ARN = result.GREEN_TG_ARN
+        env.ALB_ARN = result.ALB_ARN
+        env.LISTENER_ARN = result.LISTENER_ARN
+        env.LIVE_ENV = result.LIVE_ENV
+        env.IDLE_ENV = result.IDLE_ENV
+        env.LIVE_TG_ARN = result.LIVE_TG_ARN
+        env.IDLE_TG_ARN = result.IDLE_TG_ARN
+        env.LIVE_SERVICE = result.LIVE_SERVICE
+        env.IDLE_SERVICE = result.IDLE_SERVICE
+
+        // Log fetched values for debugging
+        echo "✅ ECS Cluster: ${env.ECS_CLUSTER}"
+        echo "✅ Blue TG ARN: ${env.BLUE_TG_ARN}"
+        echo "✅ Green TG ARN: ${env.GREEN_TG_ARN}"
+        echo "✅ ALB ARN: ${env.ALB_ARN}"
+        echo "✅ Listener ARN: ${env.LISTENER_ARN}"
+        echo "✅ LIVE ENV: ${env.LIVE_ENV}"
+        echo "✅ IDLE ENV: ${env.IDLE_ENV}"
 
         return result
 
