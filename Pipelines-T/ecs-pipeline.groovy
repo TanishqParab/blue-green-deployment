@@ -34,11 +34,22 @@ def call(Map params = [:]) {
             )
         }
         
+        triggers {
+            githubPush()
+        }
+        
         stages {
             stage('Execute Pipeline') {
                 steps {
                     script {
-                        echo "Executing ECS ${params.OPERATION} pipeline..."
+                        // Determine operation - if triggered by GitHub push, use SWITCH
+                        def operation = params.OPERATION
+                        if (currentBuild.getBuildCauses('hudson.triggers.SCMTrigger$SCMTriggerCause').size() > 0) {
+                            echo "Build triggered by GitHub push - automatically using SWITCH operation"
+                            operation = 'SWITCH'
+                        } else {
+                            echo "Executing ECS ${operation} pipeline..."
+                        }
                         
                         // Use ECS-specific working directory
                         if (!config.tfWorkingDir) {
@@ -46,7 +57,7 @@ def call(Map params = [:]) {
                         }
                         
                         // Call the appropriate pipeline based on the operation
-                        switch(params.OPERATION) {
+                        switch(operation) {
                             case 'APPLY':
                                 ecsPipeline(config)
                                 break
@@ -57,7 +68,7 @@ def call(Map params = [:]) {
                                 ecsRollbackPipeline(config)
                                 break
                             default:
-                                error "Invalid operation: ${params.OPERATION}"
+                                error "Invalid operation: ${operation}"
                         }
                     }
                 }
