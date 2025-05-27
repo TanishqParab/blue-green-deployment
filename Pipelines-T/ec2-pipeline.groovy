@@ -40,7 +40,7 @@ def call(Map params = [:]) {
                 steps {
                     script {
                         // Determine operation - if triggered by GitHub push, use SWITCH
-                        def operation = params.OPERATION
+                        def operation = params.OPERATION ?: 'APPLY'  // Default to APPLY if null
                         if (currentBuild.getBuildCauses('hudson.triggers.SCMTrigger$SCMTriggerCause').size() > 0) {
                             echo "Build triggered by GitHub push - automatically using SWITCH operation"
                             operation = 'SWITCH'
