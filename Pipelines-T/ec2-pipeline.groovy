@@ -31,11 +31,22 @@ def call(Map params = [:]) {
             )
         }
         
+        triggers {
+            githubPush()
+        }
+        
         stages {
             stage('Execute Pipeline') {
                 steps {
                     script {
-                        echo "Executing EC2 ${params.OPERATION} pipeline..."
+                        // Determine operation - if triggered by GitHub push, use SWITCH
+                        def operation = params.OPERATION
+                        if (currentBuild.getBuildCauses('hudson.triggers.SCMTrigger$SCMTriggerCause').size() > 0) {
+                            echo "Build triggered by GitHub push - automatically using SWITCH operation"
+                            operation = 'SWITCH'
+                        } else {
+                            echo "Executing EC2 ${operation} pipeline..."
+                        }
                         
                         // Use EC2-specific working directory
                         if (!config.tfWorkingDir) {
@@ -43,7 +54,7 @@ def call(Map params = [:]) {
                         }
                         
                         // Call the appropriate pipeline based on the operation
-                        switch(params.OPERATION) {
+                        switch(operation) {
                             case 'APPLY':
                                 ec2Pipeline(config)
                                 break
@@ -54,7 +65,7 @@ def call(Map params = [:]) {
                                 ec2RollbackPipeline(config)
                                 break
                             default:
-                                error "Invalid operation: ${params.OPERATION}"
+                                error "Invalid operation: ${operation}"
                         }
                     }
                 }
